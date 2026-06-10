@@ -50,7 +50,7 @@ nav { display: flex; gap: 4px; padding: 16px 32px 0; border-bottom: 1px solid va
 .tab.active { background: var(--bg); border-color: var(--border); color: var(--text); }
 .tab:hover:not(.active) { color: var(--text); background: var(--bg3); }
 .tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; }
-.dot-stock { background: var(--accent2); } .dot-ventas { background: var(--accent); } .dot-clientes { background: var(--accent3); }
+.dot-stock { background: var(--accent2); } .dot-ventas { background: var(--accent); } .dot-clientes { background: var(--accent3); } .dot-cobr { background: var(--red); }
 
 /* ── Layout ── */
 main { padding: 28px 32px; max-width: 1600px; margin: 0 auto; }
@@ -165,6 +165,15 @@ canvas { max-height: 220px; }
 .categ-miss { background: var(--red-bg);   color: var(--red);   border: 1px solid rgba(255,79,79,.2); }
 .oport-box { background: rgba(123,97,255,.08); border: 1px solid rgba(123,97,255,.25); border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #b8a8ff; line-height: 1.5; }
 .row-selected { background: rgba(123,97,255,.08) !important; }
+.cobr-grid { display: grid; grid-template-columns: 1fr 400px; gap: 16px; align-items: start; }
+.aging-pill { display:inline-block; padding:3px 9px; border-radius:20px; font-size:10px; font-weight:600; white-space:nowrap; }
+.aging-av   { background:rgba(62,207,178,.1); color:var(--green); border:1px solid rgba(62,207,178,.25); }
+.aging-07   { background:rgba(245,200,66,.1); color:var(--yellow); border:1px solid rgba(245,200,66,.25); }
+.aging-714  { background:rgba(255,140,0,.12); color:#ff8c00; border:1px solid rgba(255,140,0,.3); }
+.aging-1430 { background:rgba(255,79,79,.1); color:var(--red); border:1px solid rgba(255,79,79,.25); }
+.aging-3060 { background:rgba(180,0,0,.12); color:#ff3030; border:1px solid rgba(180,0,0,.3); }
+.aging-60   { background:rgba(120,0,0,.15); color:#ff1a1a; border:1px solid rgba(120,0,0,.3); }
+@media(max-width:900px){.cobr-grid{grid-template-columns:1fr;}}
 
 /* ── Loading / Empty ── */
 .loading { display: flex; align-items: center; justify-content: center; min-height: 260px; font-size: 13px; color: var(--muted); gap: 10px; }
@@ -199,15 +208,7 @@ canvas { max-height: 220px; }
 
 <header>
   <div class="logo">
-    <div class="logo-icon">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="12" r="10" stroke="white" stroke-width="2"/>
-        <line x1="12" y1="2" x2="12" y2="22" stroke="white" stroke-width="2"/>
-        <path d="M12 12 L6 6" stroke="white" stroke-width="2" stroke-linecap="round"/>
-        <path d="M12 12 L6 18" stroke="white" stroke-width="2" stroke-linecap="round"/>
-        <path d="M12 6 L18 12 L12 18" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </div>
+    <div class="logo-icon" style="background:transparent;padding:0"><img src="/static/kairon_logo.png" style="width:40px;height:40px;border-radius:8px;object-fit:cover" alt="Kairon"></div>
     <div class="logo-text">
       <span class="logo-name">Kairon</span>
       <span class="logo-sub">Distribuciones</span>
@@ -223,6 +224,7 @@ canvas { max-height: 220px; }
   <div class="tab active" onclick="showTab('stock')"><span class="tab-dot dot-stock"></span>Stock</div>
   <div class="tab" onclick="showTab('ventas')"><span class="tab-dot dot-ventas"></span>Ventas</div>
   <div class="tab" onclick="showTab('clientes')"><span class="tab-dot dot-clientes"></span>Clientes</div>
+  <div class="tab" onclick="showTab('cobranzas')"><span class="tab-dot dot-cobr"></span>Cobranzas</div>
 </nav>
 
 <main>
@@ -303,6 +305,52 @@ canvas { max-height: 220px; }
   </div>
 </div>
 
+
+<!-- ══ COBRANZAS ══ -->
+<div class="panel" id="panel-cobranzas">
+  <!-- KPI row -->
+  <div class="stats-row" id="cobr-stats" style="grid-template-columns:repeat(5,1fr)"></div>
+
+  <!-- Charts -->
+  <div class="chart-grid" style="grid-template-columns:2fr 1fr;margin-bottom:20px">
+    <div class="chart-card">
+      <div class="chart-title">Top 20 clientes con mayor deuda <span>Curva de Pareto</span></div>
+      <canvas id="chart-pareto" style="max-height:300px"></canvas>
+    </div>
+    <div class="chart-card" style="display:flex;flex-direction:column">
+      <div class="chart-title">Composición del aging</div>
+      <div id="aging-table" style="flex:1"></div>
+    </div>
+  </div>
+
+  <!-- Filters + export -->
+  <div class="filters">
+    <span class="filter-label">Buscar cliente:</span>
+    <input class="filter-input" id="cobr-search" placeholder="Nombre del cliente..." oninput="renderCobrTable()">
+    <span class="filter-label">Aging:</span>
+    <select class="filter-select" id="cobr-aging" onchange="renderCobrTable()">
+      <option value="">Todos</option>
+      <option value="a_vencer">A vencer</option>
+      <option value="v_0_7">Vencido 0-7 días</option>
+      <option value="v_7_14">Vencido 7-14 días</option>
+      <option value="v_14_30">Vencido 14-30 días</option>
+      <option value="v_30_60">Vencido 30-60 días</option>
+      <option value="v_mas_60">Vencido +60 días</option>
+    </select>
+    <button class="btn-pedido" onclick="exportCobrExcel()" style="background:var(--accent3);color:white;margin-left:auto">📄 Exportar Excel</button>
+  </div>
+
+  <!-- Table + detail -->
+  <div class="cobr-grid">
+    <div class="table-wrap" id="cobr-table-wrap">
+      <div class="loading"><div class="spinner"></div>Cargando cobranzas...</div>
+    </div>
+    <div id="cobr-detail" style="display:none">
+      <div class="detail-card" id="cobr-detail-card" style="border-color:var(--red);max-height:80vh;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
@@ -343,7 +391,7 @@ let chartCajas = null, chartClientes = null, selectedCliente = null;
 
 // ── Init ──────────────────────────────────────────────────
 async function init() {
-  await Promise.all([loadStock(), loadVentas(), loadClientes()]);
+  await Promise.all([loadStock(), loadVentas(), loadClientes(), loadCobranzas()]);
 }
 async function refreshAll() {
   document.getElementById('sync-info').textContent = 'Actualizando...';
@@ -351,7 +399,7 @@ async function refreshAll() {
 }
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) =>
-    t.classList.toggle('active', ['stock','ventas','clientes'][i] === name));
+    t.classList.toggle('active', ['stock','ventas','clientes','cobranzas'][i] === name));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
 }
@@ -704,6 +752,452 @@ function selectCliente(id) {
 function fmt(n){if(n===9999)return'—';return Number(n).toLocaleString('es-AR',{maximumFractionDigits:1});}
 function fmtMoney(n){return Number(n).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:0});}
 function formatMes(ym){if(!ym)return'';const[y,m]=ym.split('-');return['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][parseInt(m)-1]+' '+y;}
+
+
+// ── COBRANZAS ─────────────────────────────────────────────
+let cobrData = null, chartPareto = null, selectedCobr = null;
+let cobrSortDir = -1; // -1 = desc
+
+const AGING_META = {
+  a_vencer:  { label: "A vencer",       cls: "aging-av",   color: "#3ecfb2", hex: "3ECFB2" },
+  v_0_7:     { label: "Vencido 0-7d",   cls: "aging-07",   color: "#f5c842", hex: "F5C842" },
+  v_7_14:    { label: "Vencido 7-14d",  cls: "aging-714",  color: "#ff8c00", hex: "FF8C00" },
+  v_14_30:   { label: "Vencido 14-30d", cls: "aging-1430", color: "#ff4f4f", hex: "FF4F4F" },
+  v_30_60:   { label: "Vencido 30-60d", cls: "aging-3060", color: "#cc2200", hex: "CC2200" },
+  v_mas_60:  { label: "Vencido +60d",   cls: "aging-60",   color: "#990000", hex: "990000" },
+};
+
+async function loadCobranzas() {
+  try {
+    const r = await fetch(`${API}/api/cobranzas`);
+    const j = await r.json();
+    cobrData = j.data;
+    renderCobrStats();
+    renderCobrPareto();
+    renderAgingTable();
+    renderCobrTable();
+  } catch(e) {
+    document.getElementById('cobr-table-wrap').innerHTML = '<div class="empty">Error al cargar cobranzas</div>';
+  }
+}
+
+function renderCobrStats() {
+  const d = cobrData;
+  const pctV = d.total_deuda > 0 ? Math.round(d.total_vencido / d.total_deuda * 100) : 0;
+  const avencer = d.buckets['a_vencer']?.total || 0;
+  document.getElementById('cobr-stats').innerHTML = `
+    <div class="stat-card accent-red">
+      <div class="stat-label">Deuda total CC</div>
+      <div class="stat-value" style="color:var(--red);font-size:20px">$${fmtMoney(d.total_deuda)}</div>
+      <div class="stat-sub">${d.cantidad_facturas} facturas · ${d.fecha_calculo}</div>
+    </div>
+    <div class="stat-card accent-red">
+      <div class="stat-label">Total vencido</div>
+      <div class="stat-value" style="color:var(--red);font-size:20px">$${fmtMoney(d.total_vencido)}</div>
+      <div class="stat-sub">${pctV}% de la deuda total</div>
+    </div>
+    <div class="stat-card accent-teal">
+      <div class="stat-label">A vencer</div>
+      <div class="stat-value" style="color:var(--green);font-size:20px">$${fmtMoney(avencer)}</div>
+      <div class="stat-sub">${d.buckets['a_vencer']?.count||0} facturas vigentes</div>
+    </div>
+    <div class="stat-card accent-yellow">
+      <div class="stat-label">% Deuda / Vta ${d.mes_anterior}</div>
+      <div class="stat-value" style="color:var(--yellow)">${d.pct_deuda_ventas !== null ? d.pct_deuda_ventas + '%' : '—'}</div>
+      <div class="stat-sub">Vta mes ant: $${fmtMoney(d.total_ventas_mes_ant)}</div>
+    </div>
+    <div class="stat-card accent-teal">
+      <div class="stat-label">Días de venta en calle</div>
+      <div class="stat-value" style="color:var(--accent2)">${d.dias_venta_calle !== null ? d.dias_venta_calle : '—'}</div>
+      <div class="stat-sub">Deuda ÷ (vta mes ant ÷ 30)</div>
+    </div>
+  `;
+}
+
+function renderAgingTable() {
+  const d = cobrData;
+  const total = d.total_deuda || 1;
+  const rows = Object.entries(d.buckets).map(([k, b]) => {
+    const pct = total > 0 ? (b.total / total * 100).toFixed(1) : 0;
+    const barW = Math.max(2, Math.round(b.total / total * 100));
+    const meta = AGING_META[k];
+    return `
+      <div style="display:grid;grid-template-columns:120px 1fr 90px 50px;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+        <span class="aging-pill ${meta.cls}" style="font-size:10px">${meta.label}</span>
+        <div style="background:var(--bg3);border-radius:4px;height:10px;overflow:hidden">
+          <div style="background:${meta.color};width:${barW}%;height:100%;border-radius:4px"></div>
+        </div>
+        <span style="font-family:var(--mono);font-size:11px;text-align:right;color:var(--text)">$${fmtMoney(b.total)}</span>
+        <span style="font-family:var(--mono);font-size:11px;text-align:right;color:var(--muted)">${pct}%</span>
+      </div>`;
+  }).join('');
+  document.getElementById('aging-table').innerHTML = `
+    <div style="padding:4px 0 8px">
+      <div style="display:grid;grid-template-columns:120px 1fr 90px 50px;gap:8px;padding:0 0 6px;border-bottom:1px solid var(--border)">
+        <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:1px">Aging</span>
+        <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:1px">Distribución</span>
+        <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:1px;text-align:right">Monto</span>
+        <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:1px;text-align:right">%</span>
+      </div>
+      ${rows}
+    </div>`;
+}
+
+function renderCobrPareto() {
+  const d = cobrData;
+  const top20 = d.clientes.slice(0, 20);
+  const labels = top20.map(c => c.nombre.length > 20 ? c.nombre.slice(0,20)+'…' : c.nombre);
+  const montos = top20.map(c => c.total_deuda);
+  const totalTop = montos.reduce((a,b)=>a+b,0);
+  let acum = 0;
+  const pareto = montos.map(m => { acum += m; return Math.round(acum / totalTop * 100); });
+
+  if (chartPareto) chartPareto.destroy();
+  chartPareto = new Chart(document.getElementById('chart-pareto'), {
+    data: {
+      labels,
+      datasets: [
+        { type:'bar', data:montos, backgroundColor:'rgba(255,79,79,.3)', borderColor:'#ff4f4f', borderWidth:1.5, borderRadius:3, yAxisID:'y' },
+        { type:'line', data:pareto, borderColor:'#f5c842', borderWidth:2, pointRadius:3, pointBackgroundColor:'#f5c842', tension:.3, yAxisID:'y2' }
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:ctx=>ctx.datasetIndex===0?'$'+fmtMoney(ctx.raw):ctx.raw+'%'}} },
+      scales:{
+        x:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:9},maxRotation:35}},
+        y:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:9},callback:v=>'$'+fmtMoney(v)}},
+        y2:{position:'right',min:0,max:100,grid:{display:false},ticks:{color:'#f5c842',font:{size:9},callback:v=>v+'%'}}
+      }
+    }
+  });
+}
+
+function renderCobrTable() {
+  if (!cobrData) return;
+  const search = document.getElementById('cobr-search').value.toLowerCase();
+  const aging  = document.getElementById('cobr-aging').value;
+
+  let clientes = cobrData.clientes.filter(c => {
+    if (search && !c.nombre.toLowerCase().includes(search)) return false;
+    if (aging && !c.facturas.some(f => f.bucket === aging)) return false;
+    return true;
+  });
+  // sort by deuda desc
+  clientes.sort((a,b) => cobrSortDir * (b.total_deuda - a.total_deuda));
+
+  if (!clientes.length) {
+    document.getElementById('cobr-table-wrap').innerHTML = '<div class="empty">Sin resultados</div>';
+    return;
+  }
+
+  const rows = clientes.map(c => {
+    const sel = selectedCobr && selectedCobr.id === c.id;
+    const order = ['a_vencer','v_0_7','v_7_14','v_14_30','v_30_60','v_mas_60'];
+    const maxBucket = c.facturas.reduce((worst,f) =>
+      order.indexOf(f.bucket) > order.indexOf(worst) ? f.bucket : worst, 'a_vencer');
+    const meta = AGING_META[maxBucket];
+    return `<tr class="${sel?'row-selected':''}" onclick="selectCobrCliente(${c.id})" style="cursor:pointer">
+      <td class="td-name">${c.nombre}</td>
+      <td class="td-num" style="color:var(--red);font-weight:700">$${fmtMoney(c.total_deuda)}</td>
+      <td class="td-num">${c.facturas.length}</td>
+      <td><span class="aging-pill ${meta.cls}">${meta.label}</span></td>
+      <td class="td-num td-muted">${c.max_vencimiento > 0 ? c.max_vencimiento+' días' : 'vigente'}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('cobr-table-wrap').innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Cliente</th>
+        <th class="td-num" onclick="cobrSortDir*=-1;renderCobrTable()" style="cursor:pointer">Deuda total ↕</th>
+        <th class="td-num">Facturas</th>
+        <th>Peor aging</th>
+        <th class="td-num">Días vencido</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function selectCobrCliente(id) {
+  selectedCobr = cobrData.clientes.find(c => c.id === id);
+  if (!selectedCobr) return;
+  renderCobrTable();
+  const c = selectedCobr;
+
+  const filasFact = c.facturas.map(f => {
+    const meta = AGING_META[f.bucket];
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:6px 8px;font-size:11px;font-family:var(--mono)">${f.numero}</td>
+      <td style="padding:6px 8px;font-size:11px;color:var(--muted)">${f.vencimiento}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:right;color:var(--red);font-weight:600">$${fmtMoney(f.saldo)}</td>
+      <td style="padding:6px 8px"><span class="aging-pill ${meta.cls}">${meta.label}</span></td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('cobr-detail-card').innerHTML = `
+    <h3 style="margin-bottom:4px">${c.nombre}</h3>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:14px">${c.facturas.length} facturas pendientes</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px">
+        <div style="font-size:10px;color:var(--muted)">Deuda total</div>
+        <div style="font-size:18px;font-weight:800;color:var(--red)">$${fmtMoney(c.total_deuda)}</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px">
+        <div style="font-size:10px;color:var(--muted)">Máx. vencido</div>
+        <div style="font-size:18px;font-weight:800">${c.max_vencimiento>0?c.max_vencimiento+' días':'Vigente'}</div>
+      </div>
+    </div>
+    <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Facturas pendientes</div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:12px">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--bg3)">
+          <th style="padding:6px 8px;font-size:10px;color:var(--muted);text-align:left">Factura</th>
+          <th style="padding:6px 8px;font-size:10px;color:var(--muted);text-align:left">Vencim.</th>
+          <th style="padding:6px 8px;font-size:10px;color:var(--muted);text-align:right">Saldo</th>
+          <th style="padding:6px 8px;font-size:10px;color:var(--muted)">Aging</th>
+        </tr></thead>
+        <tbody>${filasFact}</tbody>
+      </table>
+    </div>
+    <div style="display:grid;gap:6px">
+      <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">Exportar estado de cuenta</div>
+      <button onclick="exportEstadoCuenta(${c.id},'simple')" style="width:100%;background:var(--accent3);border:none;color:white;font-family:var(--font);font-size:12px;font-weight:700;padding:9px;border-radius:8px;cursor:pointer">
+        📊 Excel — Solo saldos pendientes
+      </button>
+      <button onclick="exportEstadoCuenta(${c.id},'completo')" style="width:100%;background:rgba(123,97,255,.2);border:1px solid var(--accent3);color:#b8a8ff;font-family:var(--font);font-size:12px;font-weight:700;padding:9px;border-radius:8px;cursor:pointer">
+        📋 Excel — Movimientos completos (fact + pagos + NC)
+      </button>
+      <button onclick="exportEstadoCuentaPDF(${c.id})" style="width:100%;background:rgba(255,79,79,.15);border:1px solid rgba(255,79,79,.4);color:var(--red);font-family:var(--font);font-size:12px;font-weight:700;padding:9px;border-radius:8px;cursor:pointer">
+        📄 PDF — Estado de cuenta
+      </button>
+    </div>
+  `;
+  document.getElementById('cobr-detail').style.display = 'block';
+}
+
+// ── Exportables ───────────────────────────────────────────
+
+function fmtExcel(n) {
+  // Returns number formatted with thousand separator for Excel display
+  return Number(n);
+}
+
+function exportEstadoCuenta(clienteId, modo) {
+  const c = cobrData.clientes.find(x => x.id === clienteId);
+  if (!c) return;
+
+  let filas = [];
+  const fecha = new Date().toLocaleDateString('es-AR');
+
+  if (modo === 'simple') {
+    filas = c.facturas.map(f => ({
+      'Factura':          f.numero,
+      'Fecha':            f.fecha,
+      'Vencimiento':      f.vencimiento,
+      'Días vencido':     f.dias_venc > 0 ? f.dias_venc : 0,
+      'Monto original':   fmtExcel(f.monto_orig),
+      'Saldo pendiente':  fmtExcel(f.saldo),
+      'Aging':            AGING_META[f.bucket].label,
+    }));
+    filas.push({});
+    filas.push({ 'Factura': 'TOTAL', 'Saldo pendiente': fmtExcel(c.total_deuda) });
+  } else {
+    // Completo: facturas + pagos + NC ordenados por fecha
+    const movsFact = c.facturas.map(f => ({
+      'Tipo':            'Factura',
+      'Número':          f.numero,
+      'Fecha':           f.fecha,
+      'Vencimiento':     f.vencimiento,
+      'Debe':            fmtExcel(f.monto_orig),
+      'Haber':           '',
+      'Saldo parcial':   fmtExcel(f.saldo),
+      'Aging':           AGING_META[f.bucket]?.label || '',
+    }));
+    const movsPagNC = (c.movimientos || []).map(m => ({
+      'Tipo':            m.tipo,
+      'Número':          m.numero,
+      'Fecha':           m.fecha,
+      'Vencimiento':     '',
+      'Debe':            '',
+      'Haber':           fmtExcel(m.monto_orig),
+      'Saldo parcial':   '',
+      'Aging':           '',
+    }));
+    const todos = [...movsFact, ...movsPagNC].sort((a,b) => a.Fecha.localeCompare(b.Fecha));
+    filas = todos;
+    filas.push({});
+    filas.push({ 'Tipo': 'SALDO PENDIENTE', 'Saldo parcial': fmtExcel(c.total_deuda) });
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(filas);
+
+  // Format number columns
+  const numFmt = '#,##0.00';
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+  for (let R = range.s.r + 1; R <= range.e.r; R++) {
+    ['E','F','G'].forEach(col => {
+      const cell = ws[col + (R+1)];
+      if (cell && typeof cell.v === 'number') {
+        cell.z = numFmt;
+        cell.t = 'n';
+      }
+    });
+  }
+
+  ws['!cols'] = modo === 'simple'
+    ? [{wch:22},{wch:12},{wch:12},{wch:13},{wch:18},{wch:18},{wch:18}]
+    : [{wch:18},{wch:22},{wch:12},{wch:12},{wch:16},{wch:16},{wch:16},{wch:18}];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Estado de Cuenta');
+  const fechaF = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `ec_${modo}_${c.nombre.replace(/\s+/g,'_').slice(0,25)}_${fechaF}.xlsx`);
+}
+
+function exportEstadoCuentaPDF(clienteId) {
+  const c = cobrData.clientes.find(x => x.id === clienteId);
+  if (!c) return;
+  const fecha = new Date().toLocaleDateString('es-AR');
+
+  const agingRows = c.facturas.map(f => {
+    const meta = AGING_META[f.bucket] || {};
+    return `<tr>
+      <td>${f.numero}</td>
+      <td>${f.fecha}</td>
+      <td>${f.vencimiento}</td>
+      <td style="text-align:right">${f.dias_venc > 0 ? f.dias_venc : 0}</td>
+      <td style="text-align:right">${fmtMoney(f.monto_orig)}</td>
+      <td style="text-align:right;font-weight:700;color:#c00">${fmtMoney(f.saldo)}</td>
+      <td><span style="background:${meta.color}22;color:${meta.color};border:1px solid ${meta.color}44;padding:2px 7px;border-radius:10px;font-size:10px">${meta.label}</span></td>
+    </tr>`;
+  }).join('');
+
+  const movRows = (c.movimientos || []).map(m => `<tr style="color:#555">
+    <td colspan="2">${m.tipo}: ${m.numero}</td>
+    <td>${m.fecha}</td>
+    <td></td>
+    <td style="text-align:right;color:#090">${fmtMoney(m.monto_orig)}</td>
+    <td></td>
+    <td style="font-size:10px;color:#888">${m.tipo}</td>
+  </tr>`).join('');
+
+  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+  <title>Estado de Cuenta — ${c.nombre}</title>
+  <style>
+    body{font-family:'Helvetica Neue',sans-serif;margin:0;padding:32px;color:#1a1a2e;font-size:12px}
+    .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;border-bottom:3px solid #1ab8c4;padding-bottom:16px}
+    .logo-area{display:flex;align-items:center;gap:12px}
+    .logo-img{width:52px;height:52px;border-radius:8px}
+    .company-name{font-size:20px;font-weight:800;color:#0d7a8a;letter-spacing:-.5px}
+    .company-sub{font-size:10px;color:#888;letter-spacing:1px;text-transform:uppercase}
+    .doc-title{font-size:13px;font-weight:700;color:#444;text-align:right}
+    .doc-date{font-size:11px;color:#888;text-align:right}
+    .client-box{background:#f0fafb;border:1px solid #1ab8c4;border-radius:8px;padding:12px 16px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center}
+    .client-name{font-size:16px;font-weight:800;color:#0d7a8a}
+    .total-box{text-align:right}
+    .total-label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:1px}
+    .total-val{font-size:22px;font-weight:800;color:#c00}
+    table{width:100%;border-collapse:collapse;margin-bottom:20px}
+    thead th{background:#1ab8c4;color:white;padding:8px 10px;text-align:left;font-size:11px;font-weight:600}
+    thead th:last-child{text-align:center}
+    tbody tr:nth-child(even){background:#f8f8f8}
+    tbody td{padding:7px 10px;border-bottom:1px solid #eee;font-size:11px}
+    tfoot td{padding:8px 10px;font-weight:800;border-top:2px solid #1ab8c4;font-size:12px}
+    .footer{margin-top:24px;text-align:center;font-size:10px;color:#aaa;border-top:1px solid #eee;padding-top:12px}
+    @media print{body{padding:16px}.no-print{display:none}}
+  </style></head><body>
+  <div class="header">
+    <div class="logo-area">
+      <img src="/static/kairon_logo.png" class="logo-img" alt="Kairon">
+      <div>
+        <div class="company-name">Kairon Distribuciones</div>
+        <div class="company-sub">Estado de Cuenta Corriente</div>
+      </div>
+    </div>
+    <div>
+      <div class="doc-title">Estado de Cuenta</div>
+      <div class="doc-date">Fecha: ${fecha}</div>
+    </div>
+  </div>
+  <div class="client-box">
+    <div>
+      <div class="client-name">${c.nombre}</div>
+      <div style="font-size:11px;color:#888;margin-top:2px">${c.facturas.length} facturas pendientes</div>
+    </div>
+    <div class="total-box">
+      <div class="total-label">Saldo pendiente</div>
+      <div class="total-val">$${fmtMoney(c.total_deuda)}</div>
+    </div>
+  </div>
+  <table>
+    <thead><tr>
+      <th>Factura</th><th>Fecha</th><th>Vencimiento</th>
+      <th style="text-align:right">Días venc.</th>
+      <th style="text-align:right">Monto orig.</th>
+      <th style="text-align:right">Saldo</th>
+      <th style="text-align:center">Aging</th>
+    </tr></thead>
+    <tbody>${agingRows}${movRows}</tbody>
+    <tfoot><tr>
+      <td colspan="5" style="text-align:right">SALDO TOTAL PENDIENTE</td>
+      <td style="text-align:right;color:#c00">$${fmtMoney(c.total_deuda)}</td>
+      <td></td>
+    </tr></tfoot>
+  </table>
+  <div class="footer">Documento generado el ${fecha} · Kairon Distribuciones · Este documento es informativo</div>
+  <script>window.onload=()=>window.print()<\/script>
+  </body></html>`;
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
+function exportCobrExcel() {
+  if (!cobrData) return;
+  const search = document.getElementById('cobr-search').value.toLowerCase();
+  const aging  = document.getElementById('cobr-aging').value;
+  let clientes = cobrData.clientes.filter(c => {
+    if (search && !c.nombre.toLowerCase().includes(search)) return false;
+    if (aging && !c.facturas.some(f => f.bucket === aging)) return false;
+    return true;
+  });
+
+  const filas = [];
+  clientes.forEach(c => {
+    c.facturas.forEach(f => {
+      filas.push({
+        'Cliente':          c.nombre,
+        'Factura':          f.numero,
+        'Fecha':            f.fecha,
+        'Vencimiento':      f.vencimiento,
+        'Días vencido':     f.dias_venc > 0 ? f.dias_venc : 0,
+        'Monto original':   Number(f.monto_orig),
+        'Saldo pendiente':  Number(f.saldo),
+        'Aging':            AGING_META[f.bucket]?.label || '',
+      });
+    });
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(filas);
+
+  // Number format for money columns
+  const numFmt = '#,##0.00';
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+  for (let R = range.s.r + 1; R <= range.e.r; R++) {
+    ['F','G'].forEach(col => {
+      const cell = ws[col + (R+1)];
+      if (cell && typeof cell.v === 'number') { cell.z = numFmt; cell.t = 'n'; }
+    });
+  }
+
+  ws['!cols'] = [{wch:35},{wch:22},{wch:12},{wch:12},{wch:13},{wch:16},{wch:16},{wch:18}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Cuentas a Cobrar');
+  const fechaF = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `cuentas_cobrar_kairon_${fechaF}.xlsx`);
+}
 
 // Boot
 init();

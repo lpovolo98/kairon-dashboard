@@ -296,6 +296,186 @@ def build_clientes_data(uid, models):
     return result
 
 
+
+def build_cobranzas_data(uid, models):
+    """Cuentas a cobrar: facturas vencidas y a vencer, clustering por aging"""
+    today = date.today()
+
+    # Facturas de cliente abiertas (pendientes de cobro)
+    facturas = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASS,
+        "account.move", "search_read",
+        [[["move_type", "in", ["out_invoice", "out_refund"]],
+          ["state", "=", "posted"],
+          ["payment_state", "in", ["not_paid", "partial"]]]],
+        {"fields": ["id", "name", "partner_id", "invoice_date", "invoice_date_due",
+                    "amount_total", "amount_residual", "currency_id", "payment_state"]}
+    )
+
+    # Ventas del mes anterior (para % deuda / ventas)
+    primer_dia_mes = today.replace(day=1)
+    ultimo_mes_fin = primer_dia_mes - timedelta(days=1)
+    ultimo_mes_ini = ultimo_mes_fin.replace(day=1)
+    ventas_mes_ant = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASS,
+        "sale.order", "search_read",
+        [[["state", "in", ["sale", "done"]],
+          ["date_order", ">=", ultimo_mes_ini.strftime("%Y-%m-%d")],
+          ["date_order", "<=", ultimo_mes_fin.strftime("%Y-%m-%d")]]],
+        {"fields": ["amount_total"]}
+    )
+    total_ventas_mes_ant = sum(v["amount_total"] for v in ventas_mes_ant)
+
+    # Clustering aging
+    buckets = {
+        "a_vencer":    {"label": "A vencer",          "min": None, "max": 0,   "total": 0, "count": 0},
+        "v_0_7":       {"label": "Vencido 0-7 días",  "min": 0,    "max": 7,   "total": 0, "count": 0},
+        "v_7_14":      {"label": "Vencido 7-14 días", "min": 7,    "max": 14,  "total": 0, "count": 0},
+        "v_14_30":     {"label": "Vencido 14-30 días","min": 14,   "max": 30,  "total": 0, "count": 0},
+        "v_30_60":     {"label": "Vencido 30-60 días","min": 30,   "max": 60,  "total": 0, "count": 0},
+        "v_mas_60":    {"label": "Vencido +60 días",  "min": 60,   "max": None,"total": 0, "count": 0},
+    }
+
+    clientes_map = defaultdict(lambda: {
+        "facturas": [], "total_deuda": 0, "max_vencimiento": 0
+    })
+
+    facturas_detalle = []
+    for f in facturas:
+        monto = f["amount_residual"]
+        if monto <= 0:
+            continue
+        partner_id   = f["partner_id"][0] if f["partner_id"] else None
+        partner_nom  = f["partner_id"][1] if f["partner_id"] else "Sin cliente"
+        fecha_venc   = date.fromisoformat(f["invoice_date_due"]) if f["invoice_date_due"] else today
+        dias_venc    = (today - fecha_venc).days  # positivo = vencido, negativo = a vencer
+
+        # Bucket
+        if dias_venc <= 0:
+            bucket = "a_vencer"
+        elif dias_venc <= 7:
+            bucket = "v_0_7"
+        elif dias_venc <= 14:
+            bucket = "v_7_14"
+        elif dias_venc <= 30:
+            bucket = "v_14_30"
+        elif dias_venc <= 60:
+            bucket = "v_30_60"
+        else:
+            bucket = "v_mas_60"
+
+        buckets[bucket]["total"] += monto
+        buckets[bucket]["count"] += 1
+
+        clientes_map[partner_id]["total_deuda"] += monto
+        clientes_map[partner_id]["nombre"] = partner_nom
+        clientes_map[partner_id]["max_vencimiento"] = max(
+            clientes_map[partner_id]["max_vencimiento"], dias_venc)
+        clientes_map[partner_id]["facturas"].append({
+            "id":          f["id"],
+            "numero":      f["name"],
+            "tipo":        "Factura",
+            "fecha":       f.get("invoice_date") or "",
+            "vencimiento": f["invoice_date_due"] or "",
+            "dias_venc":   dias_venc,
+            "monto_orig":  round(f["amount_total"], 2),
+            "saldo":       round(monto, 2),
+            "estado_pago": f["payment_state"],
+            "bucket":      bucket,
+        })
+
+        facturas_detalle.append({
+            "partner_id":  partner_id,
+            "partner_nom": partner_nom,
+            "numero":      f["name"],
+            "fecha":       f.get("invoice_date") or "",
+            "vencimiento": f["invoice_date_due"] or "",
+            "dias_venc":   dias_venc,
+            "saldo":       round(monto, 2),
+            "bucket":      bucket,
+        })
+
+    total_deuda = sum(b["total"] for b in buckets.values())
+    total_vencido = sum(b["total"] for k, b in buckets.items() if k != "a_vencer")
+
+    # Obtener pagos y NC por cliente (para estado de cuenta completo)
+    partner_ids = list(clientes_map.keys())
+    movimientos_map = defaultdict(list)
+    if partner_ids:
+        # Pagos recibidos
+        pagos = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASS,
+            "account.payment", "search_read",
+            [[["partner_id", "in", partner_ids],
+              ["payment_type", "=", "inbound"],
+              ["state", "=", "posted"]]],
+            {"fields": ["id", "name", "partner_id", "date", "amount"], "limit": 5000}
+        )
+        for p in pagos:
+            pid = p["partner_id"][0] if p["partner_id"] else None
+            if pid and pid in clientes_map:
+                movimientos_map[pid].append({
+                    "tipo":        "Pago",
+                    "numero":      p.get("name") or "Pago",
+                    "fecha":       p.get("date") or "",
+                    "vencimiento": "",
+                    "monto_orig":  round(p["amount"], 2),
+                    "saldo":       -round(p["amount"], 2),
+                    "estado_pago": "posted",
+                })
+        # Notas de crédito aplicadas
+        ncs = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASS,
+            "account.move", "search_read",
+            [[["move_type", "=", "out_refund"],
+              ["state", "=", "posted"],
+              ["partner_id", "in", partner_ids]]],
+            {"fields": ["id", "name", "partner_id", "invoice_date", "amount_total", "amount_residual"]}
+        )
+        for nc in ncs:
+            pid = nc["partner_id"][0] if nc["partner_id"] else None
+            if pid and pid in clientes_map:
+                movimientos_map[pid].append({
+                    "tipo":        "Nota de Crédito",
+                    "numero":      nc["name"],
+                    "fecha":       nc.get("invoice_date") or "",
+                    "vencimiento": "",
+                    "monto_orig":  round(nc["amount_total"], 2),
+                    "saldo":       -round(nc["amount_total"], 2),
+                    "estado_pago": "posted",
+                })
+
+    # Top clientes ordenados por deuda
+    clientes_list = []
+    for pid, data in clientes_map.items():
+        movs = sorted(movimientos_map.get(pid, []), key=lambda x: x["fecha"], reverse=True)
+        clientes_list.append({
+            "id":              pid,
+            "nombre":          data["nombre"],
+            "total_deuda":     round(data["total_deuda"], 2),
+            "max_vencimiento": data["max_vencimiento"],
+            "facturas":        sorted(data["facturas"], key=lambda x: x["dias_venc"], reverse=True),
+            "movimientos":     movs,
+        })
+    clientes_list.sort(key=lambda x: -x["total_deuda"])
+
+    # Días de venta en la calle
+    dias_venta_calle = round(total_deuda / (total_ventas_mes_ant / 30), 1) if total_ventas_mes_ant > 0 else None
+    pct_deuda_ventas = round(total_deuda / total_ventas_mes_ant * 100, 1) if total_ventas_mes_ant > 0 else None
+
+    return {
+        "total_deuda":          round(total_deuda, 2),
+        "total_vencido":        round(total_vencido, 2),
+        "buckets":              {k: {"label": v["label"], "total": round(v["total"],2), "count": v["count"]} for k,v in buckets.items()},
+        "clientes":             clientes_list,
+        "total_ventas_mes_ant": round(total_ventas_mes_ant, 2),
+        "mes_anterior":         ultimo_mes_fin.strftime("%B %Y"),
+        "dias_venta_calle":     dias_venta_calle,
+        "pct_deuda_ventas":     pct_deuda_ventas,
+        "cantidad_facturas":    len(facturas_detalle),
+        "fecha_calculo":        today.isoformat(),
+    }
+
 # ─── API Routes ─────────────────────────────────────────────
 
 @app.get("/api/stock")
@@ -338,12 +518,23 @@ def status():
         "timestamp": datetime.now().isoformat()
     }
 
+@app.get("/api/cobranzas")
+def get_cobranzas(force: bool = False):
+    cached = cache_get("cobranzas")
+    if cached and not force:
+        return {"data": cached, "cached": True, "ttl": CACHE_TTL}
+    uid, models = odoo_connect()
+    data = build_cobranzas_data(uid, models)
+    cache_set("cobranzas", data)
+    return {"data": data, "cached": False, "ttl": CACHE_TTL}
+
 @app.get("/api/refresh")
 def refresh_all():
     uid, models = odoo_connect()
-    cache_set("stock",    build_stock_data(uid, models))
-    cache_set("ventas",   build_ventas_data(uid, models))
-    cache_set("clientes", build_clientes_data(uid, models))
+    cache_set("stock",      build_stock_data(uid, models))
+    cache_set("ventas",     build_ventas_data(uid, models))
+    cache_set("clientes",   build_clientes_data(uid, models))
+    cache_set("cobranzas",  build_cobranzas_data(uid, models))
     return {"ok": True, "refreshed_at": datetime.now().isoformat()}
 
 # ─── Serve frontend ─────────────────────────────────────────
