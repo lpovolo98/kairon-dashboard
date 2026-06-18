@@ -484,7 +484,12 @@ async function init() {
 }
 async function refreshAll() {
   document.getElementById('sync-info').textContent = 'Actualizando...';
-  try { await fetch(`${API}/api/refresh`); await init(); } catch(e) {}
+  try {
+    await fetch(`${API}/api/refresh`);
+    await init();
+  } catch(e) {
+    document.getElementById('sync-info').textContent = 'Error al actualizar — reintentá en unos segundos';
+  }
 }
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) =>
@@ -917,55 +922,153 @@ function renderVentasCharts() {
   const clis   = meses.map(m => porMes[m].clientes.size);
   const montos = meses.map(m => Math.round(porMes[m].monto));
 
-  // Proyección de facturación para el mes en curso (si no terminó)
   const mesActualStr = new Date().toISOString().slice(0,7);
+
+  // Proyección cajas para el mes en curso
+  let cajasProyectadas = [...cajas];
+  if (diasHabilesInfo && meses.includes(mesActualStr) && diasHabilesInfo.restantes > 0) {
+    const idx = meses.indexOf(mesActualStr);
+    const cajasActual = porMes[mesActualStr].cajas;
+    const diasTr = diasHabilesInfo.transcurridos || 1;
+    cajasProyectadas[idx] = Math.round(cajasActual + (cajasActual / diasTr) * diasHabilesInfo.restantes);
+  }
+
+  // Proyección facturación para el mes en curso
   let montosProyectados = [...montos];
   if (diasHabilesInfo && meses.includes(mesActualStr) && diasHabilesInfo.restantes > 0) {
     const idx = meses.indexOf(mesActualStr);
     const montoActual = porMes[mesActualStr].monto;
     const diasTr = diasHabilesInfo.transcurridos || 1;
-    const promedioDiario = montoActual / diasTr;
-    const proyectado = montoActual + (promedioDiario * diasHabilesInfo.restantes);
-    montosProyectados[idx] = Math.round(proyectado);
+    montosProyectados[idx] = Math.round(montoActual + (montoActual / diasTr) * diasHabilesInfo.restantes);
   }
 
   if (chartCajas) chartCajas.destroy();
   if (chartClientes) chartClientes.destroy();
   if (chartFacturacion) chartFacturacion.destroy();
 
-  const base_opts = {
-    responsive:true, maintainAspectRatio:true,
-    plugins:{legend:{display:false}},
-    scales:{
-      x:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
-      y:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}}
+  // Helper: etiqueta con fondo para data labels
+  const labelPlugin = {
+    afterDatasetsDraw(chart) {
+      const ctx = chart.ctx;
+      // Polyfill roundRect para browsers que no lo soportan
+      if (!ctx.roundRect) ctx.roundRect = function(x,y,w,h) { ctx.rect(x,y,w,h); };
+      chart.data.datasets.forEach((ds, di) => {
+        if (!ds._showLabels) return;
+        const meta = chart.getDatasetMeta(di);
+        meta.data.forEach((bar, i) => {
+          const val = ds.data[i];
+          if (!val || val === 0) return;
+          const text = ds._labelFmt ? ds._labelFmt(val) : Number(val).toLocaleString('es-AR', {maximumFractionDigits:1});
+          ctx.save();
+          ctx.font = '600 10px Poppins, sans-serif';
+          const tw = ctx.measureText(text).width;
+          const px = bar.x, py = bar.y - 6;
+          const pad = 4;
+          ctx.fillStyle = ds._labelBg || 'rgba(26,30,40,0.88)';
+          ctx.beginPath();
+          ctx.roundRect(px - tw/2 - pad, py - 12, tw + pad*2, 16, 3);
+          ctx.fill();
+          ctx.fillStyle = ds._labelColor || '#e8eaf0';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(text, px, py - 4);
+          ctx.restore();
+        });
+      });
     }
   };
 
-  chartCajas = new Chart(document.getElementById('chart-cajas'),{type:'bar',data:{labels,datasets:[{data:cajas,backgroundColor:'rgba(62,207,178,.25)',borderColor:'#3ecfb2',borderWidth:1.5,borderRadius:4}]},options:{...base_opts}});
-  chartClientes = new Chart(document.getElementById('chart-clientes'),{type:'line',data:{labels,datasets:[{data:clis,borderColor:'#f5c842',borderWidth:2,pointBackgroundColor:'#f5c842',tension:.3,fill:true,backgroundColor:'rgba(245,200,66,.06)'}]},options:{...base_opts}});
+  const fmtM = v => {
+    if (v >= 1e6) return (v/1e6).toLocaleString('es-AR',{minimumFractionDigits:1,maximumFractionDigits:1}) + 'M';
+    if (v >= 1e3) return (v/1e3).toLocaleString('es-AR',{maximumFractionDigits:0}) + 'K';
+    return v.toLocaleString('es-AR',{maximumFractionDigits:0});
+  };
 
-  // Gráfico de facturación: barra real + barra proyectada (solo difiere en el último mes)
-  const esProyectado = meses.map(m => m === mesActualStr && montosProyectados[meses.indexOf(m)] !== montos[meses.indexOf(m)]);
-  chartFacturacion = new Chart(document.getElementById('chart-facturacion'), {
+  const esProyCajas = meses.map((m,i) => cajasProyectadas[i] !== cajas[i]);
+  const esProyMonto = meses.map((m,i) => montosProyectados[i] !== montos[i]);
+
+  // ── Gráfico cajas: barra real + proyectada (stacked)
+  chartCajas = new Chart(document.getElementById('chart-cajas'), {
     data: {
       labels,
       datasets: [
-        { type:'bar', label:'Real', data: montos, backgroundColor:'rgba(62,207,178,.35)', borderColor:'#3ecfb2', borderWidth:1.5, borderRadius:4 },
-        { type:'bar', label:'Proyectado', data: montosProyectados.map((v,i)=> esProyectado[i] ? v - montos[i] : 0), backgroundColor:'rgba(245,200,66,.25)', borderColor:'#f5c842', borderWidth:1.5, borderDash:[4,3], borderRadius:4 },
+        {
+          type:'bar', label:'Real', data: cajas,
+          backgroundColor:'rgba(62,207,178,.35)', borderColor:'#3ecfb2', borderWidth:1.5, borderRadius:4,
+          _showLabels: true, _labelBg:'rgba(62,207,178,0.18)', _labelColor:'#3ecfb2',
+          _labelFmt: v => Number(v).toLocaleString('es-AR',{maximumFractionDigits:1})
+        },
+        {
+          type:'bar', label:'Proyectado', data: cajasProyectadas.map((v,i) => esProyCajas[i] ? v - cajas[i] : 0),
+          backgroundColor:'rgba(245,200,66,.22)', borderColor:'#f5c842', borderWidth:1.5, borderRadius:4,
+        }
       ]
     },
     options: {
       responsive:true, maintainAspectRatio:true,
+      layout:{ padding:{ top:14 } },
+      plugins:{
+        legend:{display:true, labels:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${Number(ctx.raw).toLocaleString('es-AR',{maximumFractionDigits:1})}`}}
+      },
+      scales:{
+        x:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        y:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}}
+      }
+    },
+    plugins: [labelPlugin]
+  });
+
+  // ── Gráfico clientes (línea, sin proyección)
+  chartClientes = new Chart(document.getElementById('chart-clientes'), {
+    type:'line',
+    data:{labels, datasets:[{
+      data:clis, borderColor:'#f5c842', borderWidth:2,
+      pointBackgroundColor:'#f5c842', tension:.3, fill:true,
+      backgroundColor:'rgba(245,200,66,.06)',
+      _showLabels:true, _labelBg:'rgba(245,200,66,0.18)', _labelColor:'#f5c842'
+    }]},
+    options:{
+      responsive:true, maintainAspectRatio:true,
+      layout:{ padding:{ top:14 } },
+      plugins:{legend:{display:false}, tooltip:{callbacks:{label:ctx=>`Clientes: ${ctx.raw}`}}},
+      scales:{
+        x:{grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        y:{grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}}
+      }
+    },
+    plugins:[labelPlugin]
+  });
+
+  // ── Gráfico facturación: barra real + proyectada, etiquetas en M
+  chartFacturacion = new Chart(document.getElementById('chart-facturacion'), {
+    data: {
+      labels,
+      datasets: [
+        {
+          type:'bar', label:'Real', data: montos,
+          backgroundColor:'rgba(62,207,178,.35)', borderColor:'#3ecfb2', borderWidth:1.5, borderRadius:4,
+          _showLabels:true, _labelBg:'rgba(62,207,178,0.18)', _labelColor:'#3ecfb2', _labelFmt:fmtM
+        },
+        {
+          type:'bar', label:'Proyectado', data: montosProyectados.map((v,i) => esProyMonto[i] ? v - montos[i] : 0),
+          backgroundColor:'rgba(245,200,66,.22)', borderColor:'#f5c842', borderWidth:1.5, borderRadius:4,
+        }
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:true,
+      layout:{ padding:{ top:14 } },
       plugins:{
         legend:{display:true, labels:{color:'#5c6278',font:{family:'Poppins',size:10}}},
         tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: $${fmtMoney(ctx.raw)}`}}
       },
       scales:{
-        x:{stacked:true, grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
-        y:{stacked:true, grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:9},callback:v=>'$'+fmtMoney(v)}}
+        x:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        y:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:9}, callback:v=>'$'+fmtM(v)}}
       }
-    }
+    },
+    plugins:[labelPlugin]
   });
 }
 

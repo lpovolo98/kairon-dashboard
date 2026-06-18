@@ -421,7 +421,9 @@ def build_clientes_data(uid, models):
         if not ords:
             oportunidad = "Sin compras en 90 días — reactivar"
         elif not compro_este_mes:
-            oportunidad = f"No compró este mes — último pedido hace {(date.today() - date.fromisoformat(ords[-1]['date_order'][:10])).days} días"
+            ultimo_pedido = max(ords, key=lambda o: o["date_order"])
+            dias_desde_ultimo = (date.today() - date.fromisoformat(ultimo_pedido["date_order"][:10])).days
+            oportunidad = f"No compró este mes — último pedido hace {dias_desde_ultimo} días"
         elif categs_faltantes:
             oportunidad = f"No compra: {', '.join(sorted(categs_faltantes)[:3])}"
         else:
@@ -701,12 +703,25 @@ def get_dias_habiles():
 @app.get("/api/refresh")
 def refresh_all():
     uid, models = odoo_connect()
-    cache_set("stock",      build_stock_data(uid, models))
-    cache_set("ventas",     build_ventas_data(uid, models))
-    cache_set("clientes",   build_clientes_data(uid, models))
-    cache_set("cartera",    build_cartera_data(uid, models))
-    cache_set("cobranzas",  build_cobranzas_data(uid, models))
-    return {"ok": True, "refreshed_at": datetime.now().isoformat()}
+    resultados = {}
+    builders = {
+        "stock":     build_stock_data,
+        "ventas":    build_ventas_data,
+        "clientes":  build_clientes_data,
+        "cartera":   build_cartera_data,
+        "cobranzas": build_cobranzas_data,
+    }
+    for key, builder in builders.items():
+        try:
+            cache_set(key, builder(uid, models))
+            resultados[key] = "ok"
+        except Exception as e:
+            # Si un módulo falla, los demás se siguen actualizando igual.
+            # El caché previo de este módulo queda intacto (no se pisa con error).
+            resultados[key] = f"error: {str(e)[:200]}"
+
+    ok_general = all(v == "ok" for v in resultados.values())
+    return {"ok": ok_general, "refreshed_at": datetime.now().isoformat(), "detalle": resultados}
 
 # ─── Serve frontend ─────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")
