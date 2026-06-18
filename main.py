@@ -1,6 +1,8 @@
 import xmlrpc.client
 import os
 import time
+import urllib.request
+import json
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from fastapi import FastAPI, HTTPException
@@ -54,11 +56,95 @@ def odoo_call(models, uid, model, method, domain, fields, limit=5000):
         {"fields": fields, "limit": limit}
     )
 
+# ─── Feriados Argentina (ArgentinaDatos API) ─────────────────
+_feriados_cache = {}
+
+def get_feriados_argentina(anio):
+    """Trae los feriados nacionales de Argentina para un año dado.
+    Cachea en memoria por el resto de la vida del proceso (los feriados
+    de un año no cambian una vez publicados)."""
+    if anio in _feriados_cache:
+        return _feriados_cache[anio]
+    try:
+        url = f"https://api.argentinadatos.com/v1/feriados/{anio}"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        fechas = {item["fecha"] for item in data}  # set de "YYYY-MM-DD"
+        _feriados_cache[anio] = fechas
+        return fechas
+    except Exception:
+        # Si la API externa falla, seguimos sin feriados (solo fin de semana)
+        return set()
+
+def es_dia_habil(d, feriados_set):
+    """Lunes=0 ... Domingo=6. Hábil = no es sábado/domingo y no es feriado."""
+    if d.weekday() >= 5:
+        return False
+    if d.strftime("%Y-%m-%d") in feriados_set:
+        return False
+    return True
+
+def dias_habiles_transcurridos_y_restantes(hoy=None):
+    """Para el mes de 'hoy' (o el mes actual si no se especifica), devuelve
+    (dias_habiles_transcurridos_incluyendo_hoy, dias_habiles_restantes_excluyendo_hoy,
+    dias_habiles_totales_del_mes)."""
+    if hoy is None:
+        hoy = date.today()
+    primer_dia = hoy.replace(day=1)
+    if hoy.month == 12:
+        ultimo_dia = date(hoy.year, 12, 31)
+    else:
+        ultimo_dia = date(hoy.year, hoy.month + 1, 1) - timedelta(days=1)
+
+    feriados = get_feriados_argentina(hoy.year)
+
+    transcurridos = 0
+    restantes = 0
+    total = 0
+    d = primer_dia
+    while d <= ultimo_dia:
+        if es_dia_habil(d, feriados):
+            total += 1
+            if d <= hoy:
+                transcurridos += 1
+            else:
+                restantes += 1
+        d += timedelta(days=1)
+
+    return transcurridos, restantes, total
+
+def get_uom_factors(models, uid):
+    """Trae el factor real de TODAS las UdM del sistema (uom.uom.factor).
+    Este factor ya está cargado correctamente en Odoo para cada empaque
+    (Caja=16, Displays=12, Six-Pack=6, Display x10u=10, etc), así que no
+    hace falta mantener una tabla manual — usamos la fuente de verdad."""
+    uoms = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASS,
+        "uom.uom", "search_read", [[]],
+        {"fields": ["id", "name", "factor"]}
+    )
+    return {u["id"]: (u["factor"] or 1) for u in uoms}
+
+def normalizar_qty(qty, uom_id_tuple, uom_factors):
+    """qty viene expresado en la UdM elegida en esa línea específica
+    (puede ser Units, Caja, Displays, Six-Pack, etc — varía línea a línea
+    incluso para el mismo producto). El factor de esa UdM (ya cargado en
+    Odoo) indica cuántas unidades base representa, así que normalizamos
+    multiplicando por ese factor."""
+    if not uom_id_tuple:
+        return qty
+    uom_id = uom_id_tuple[0]
+    factor = uom_factors.get(uom_id, 1)
+    return qty * factor
+
 # ─── Data builders ──────────────────────────────────────────
 
 def build_stock_data(uid, models):
-    """Stock actual + promedio ventas diario últimos 2 meses + días de inventario"""
-    # Stock actual por producto
+    """Stock actual en CAJAS + promedio de ventas (facturado) en CAJAS + días de inventario.
+    Todo el módulo trabaja en cajas: stock físico ÷ unid_caja, venta facturada normalizada ÷ unid_caja."""
+    uom_factors = get_uom_factors(models, uid)
+
+    # Stock actual por producto (Odoo lo guarda en unidades base del producto)
     quants = odoo_call(models, uid, "stock.quant", "search_read",
         [["location_id.usage", "=", "internal"]],
         ["product_id", "quantity", "reserved_quantity"]
@@ -69,21 +155,20 @@ def build_stock_data(uid, models):
             pid = q["product_id"][0]
             stock_map[pid] += (q["quantity"] - q.get("reserved_quantity", 0))
 
-    # Ventas últimos 2 meses
+    # Ventas últimos 2 meses (cantidad FACTURADA, normalizada a unidades reales
+    # usando el factor real de la UdM de cada línea — ver normalizar_qty)
     fecha_desde = (date.today() - timedelta(days=60)).strftime("%Y-%m-%d")
     lineas = odoo_call(models, uid, "sale.order.line", "search_read",
         [["order_id.state", "in", ["sale", "done"]],
          ["order_id.date_order", ">=", fecha_desde]],
-        ["product_id", "product_uom_qty", "order_id"]
+        ["product_id", "qty_invoiced", "product_uom_id", "order_id"]
     )
+
     venta_map = defaultdict(float)
     for l in lineas:
         if l["product_id"]:
-            venta_map[l["product_id"][0]] += l["product_uom_qty"]
-
-    # Promedio diario (60 días)
-    dias = 60
-    avg_map = {pid: qty / dias for pid, qty in venta_map.items()}
+            pid = l["product_id"][0]
+            venta_map[pid] += normalizar_qty(l["qty_invoiced"], l["product_uom_id"], uom_factors)
 
     # Info productos
     pids = list(set(list(stock_map.keys()) + list(venta_map.keys())))
@@ -92,15 +177,22 @@ def build_stock_data(uid, models):
     productos = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
         "product.product", "search_read",
         [[["id", "in", pids]]],
-        {"fields": ["id", "name", "categ_id", "default_code", "uom_id", "standard_price"]}
+        {"fields": ["id", "name", "categ_id", "default_code", "uom_id", "standard_price", "x_studio_unidades_por_caja"]}
     )
 
+    dias = 60
     result = []
     for p in productos:
         pid = p["id"]
-        stock_actual = round(stock_map.get(pid, 0), 2)
-        avg_diario   = round(avg_map.get(pid, 0), 3)
-        dias_inv     = round(stock_actual / avg_diario, 1) if avg_diario > 0 else 9999
+        unid_caja = p.get("x_studio_unidades_por_caja") or 1
+
+        # Stock y venta, convertidos de unidades a CAJAS
+        stock_unidades = stock_map.get(pid, 0)
+        venta_unidades = venta_map.get(pid, 0)
+        stock_cajas = round(stock_unidades / unid_caja, 2) if unid_caja > 0 else stock_unidades
+        avg_diario_cajas = round((venta_unidades / unid_caja) / dias, 3) if unid_caja > 0 else round(venta_unidades / dias, 3)
+
+        dias_inv = round(stock_cajas / avg_diario_cajas, 1) if avg_diario_cajas > 0 else 9999
 
         # Semáforo: rojo < 7 días, amarillo < 21, verde >= 21
         if dias_inv < 7:
@@ -110,20 +202,22 @@ def build_stock_data(uid, models):
         else:
             semaforo = "green"
 
-        costo = round(p.get("standard_price", 0) or 0, 2)
+        costo_unidad = round(p.get("standard_price", 0) or 0, 2)
+        costo_caja = round(costo_unidad * unid_caja, 2)
         result.append({
             "id": pid,
             "codigo": p.get("default_code") or "",
             "nombre": p["name"],
             "categoria": p["categ_id"][1] if p["categ_id"] else "Sin categoría",
-            "uom": p["uom_id"][1] if p["uom_id"] else "",
-            "stock_actual": stock_actual,
-            "avg_diario": avg_diario,
-            "avg_mensual": round(avg_diario * 30, 1),
+            "uom": "Cajas",
+            "unid_caja": unid_caja,
+            "stock_actual": stock_cajas,
+            "avg_diario": avg_diario_cajas,
+            "avg_mensual": round(avg_diario_cajas * 30, 1),
             "dias_inventario": dias_inv,
             "semaforo": semaforo,
-            "costo": costo,
-            "valorizado": round(stock_actual * costo, 2),
+            "costo": costo_caja,
+            "valorizado": round(stock_cajas * costo_caja, 2),
         })
 
     result.sort(key=lambda x: x["dias_inventario"])
@@ -131,71 +225,125 @@ def build_stock_data(uid, models):
 
 
 def build_ventas_data(uid, models):
-    """Informe de ventas: clientes compradores, cajas, recompra — por mes y categoría"""
+    """Ventas detalladas: trae líneas con producto, proveedor, segmento, cajas, monto, cliente, mes,
+    vendedor, canal y tipo de comercio del cliente.
+    El frontend hace todo el filtrado/agrupado interactivo a partir de esta data cruda."""
     fecha_desde = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    uom_factors = get_uom_factors(models, uid)
 
     ordenes = odoo_call(models, uid, "sale.order", "search_read",
         [["state", "in", ["sale", "done"]], ["date_order", ">=", fecha_desde]],
-        ["id", "partner_id", "date_order", "amount_total"]
+        ["id", "partner_id", "date_order", "amount_total", "user_id"]
     )
     order_ids = [o["id"] for o in ordenes]
-    order_date = {o["id"]: o["date_order"][:7] for o in ordenes}  # YYYY-MM
+    order_map = {o["id"]: o for o in ordenes}
 
     lineas = []
     if order_ids:
         lineas = odoo_call(models, uid, "sale.order.line", "search_read",
             [["order_id", "in", order_ids]],
-            ["order_id", "product_id", "product_uom_qty", "price_subtotal"]
+            ["order_id", "product_id", "qty_invoiced", "product_uom_id", "price_subtotal", "price_total"]
         )
 
-    # Obtener categorías de productos
+    # Info de productos: categoría, costo, unidades por caja (para mostrar en "cajas")
     prod_ids = list({l["product_id"][0] for l in lineas if l["product_id"]})
-    prod_categ = {}
+    prod_info = {}
     if prod_ids:
         prods = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
             "product.product", "search_read",
             [[["id", "in", prod_ids]]],
-            {"fields": ["id", "categ_id"]}
+            {"fields": ["id", "name", "categ_id", "default_code", "x_studio_unidades_por_caja"]}
         )
-        prod_categ = {p["id"]: (p["categ_id"][1] if p["categ_id"] else "Sin categoría") for p in prods}
+        for p in prods:
+            prod_info[p["id"]] = {
+                "nombre":   p["name"],
+                "categoria": p["categ_id"][1] if p["categ_id"] else "Sin categoría",
+                "codigo":   p.get("default_code") or "",
+                "unid_caja": p.get("x_studio_unidades_por_caja") or 1,
+            }
 
-    # Agregar por mes
-    meses = defaultdict(lambda: {
-        "clientes": set(), "cajas": 0, "monto": 0,
-        "ordenes_por_cliente": defaultdict(int),
-        "categorias": defaultdict(float)
-    })
+    # Info de clientes: canal y tipo de comercio (res.partner)
+    partner_ids = list({o["partner_id"][0] for o in ordenes if o["partner_id"]})
+    partner_info = {}
+    if partner_ids:
+        partners = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+            "res.partner", "search_read",
+            [[["id", "in", partner_ids]]],
+            {"fields": ["id", "x_studio_canal", "x_studio_tipo_de_comercio"]}
+        )
+        for p in partners:
+            partner_info[p["id"]] = {
+                "canal": p.get("x_studio_canal") or "Sin canal",
+                "tipo_comercio": p.get("x_studio_tipo_de_comercio") or "Sin tipo",
+            }
 
+    # Construir filas detalladas (una por línea de venta).
+    # Métrica principal: CANTIDAD FACTURADA, normalizada a unidades reales
+    # usando el factor REAL de la UdM de Odoo (uom.uom.factor) — no una tabla
+    # manual. Cada línea puede estar en una UdM distinta (Units, Caja,
+    # Displays, Six-Pack...) según cómo la cargó el vendedor; el factor de
+    # esa UdM específica indica cuántas unidades base representa.
+    filas = []
     for l in lineas:
         oid = l["order_id"][0] if l["order_id"] else None
-        if not oid or oid not in order_date:
+        if not oid or oid not in order_map:
             continue
-        mes = order_date[oid]
-        orden = next((o for o in ordenes if o["id"] == oid), None)
-        if not orden:
+        orden = order_map[oid]
+        pid = l["product_id"][0] if l["product_id"] else None
+        if not pid or pid not in prod_info:
             continue
-        partner_id = orden["partner_id"][0] if orden["partner_id"] else None
-        categ = prod_categ.get(l["product_id"][0], "Sin categoría") if l["product_id"] else "Sin categoría"
+        info = prod_info[pid]
+        unid_caja = info["unid_caja"] or 1
 
-        meses[mes]["clientes"].add(partner_id)
-        meses[mes]["cajas"] += l["product_uom_qty"]
-        meses[mes]["monto"] += l["price_subtotal"]
-        meses[mes]["ordenes_por_cliente"][partner_id] += 1
-        meses[mes]["categorias"][categ] += l["product_uom_qty"]
+        unidades_facturadas = normalizar_qty(l["qty_invoiced"], l["product_uom_id"], uom_factors)
+        cajas = unidades_facturadas / unid_caja if unid_caja > 0 else 0
 
-    result = []
-    for mes, data in sorted(meses.items()):
-        recompra = sum(1 for cnt in data["ordenes_por_cliente"].values() if cnt > 1)
-        result.append({
-            "mes": mes,
-            "clientes_compradores": len(data["clientes"]),
-            "cajas_vendidas": round(data["cajas"], 1),
-            "monto_total": round(data["monto"], 2),
-            "clientes_recompra": recompra,
-            "categorias": dict(data["categorias"]),
+        pid_partner = orden["partner_id"][0] if orden["partner_id"] else None
+        pinfo = partner_info.get(pid_partner, {"canal": "Sin canal", "tipo_comercio": "Sin tipo"})
+
+        filas.append({
+            "mes":            orden["date_order"][:7],
+            "fecha":          orden["date_order"][:10],
+            "partner_id":     pid_partner,
+            "partner_nom":    orden["partner_id"][1] if orden["partner_id"] else "Sin cliente",
+            "vendedor":       orden["user_id"][1] if orden.get("user_id") else "Sin vendedor",
+            "canal":          pinfo["canal"],
+            "tipo_comercio":  pinfo["tipo_comercio"],
+            "product_id":     pid,
+            "producto":       info["nombre"],
+            "codigo":         info["codigo"],
+            "categoria":      info["categoria"],
+            "unidades":       round(unidades_facturadas, 2),
+            "cajas":          round(cajas, 3),
+            "monto_total":    round(l.get("price_total", l["price_subtotal"]), 2),
         })
 
-    return result
+    return filas
+
+
+def build_cartera_data(uid, models):
+    """Clientes en cartera real (filtro de negocio: tiene órdenes y no es un
+    contacto interno/genérico), con su vendedor, canal y tipo de comercio.
+    Es la base fija para calcular cobertura de cartera por vendedor/canal."""
+    domain = ["&", "&", "&",
+        ["sale_order_ids", "!=", False],
+        ["name", "not ilike", "NUTREGAL"],
+        ["name", "not ilike", "MERCADERIA"],
+        ["name", "not ilike", "Julio K"]
+    ]
+    partners = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "res.partner", "search_read",
+        [domain],
+        {"fields": ["id", "name", "user_id", "x_studio_canal", "x_studio_tipo_de_comercio"]}
+    )
+    return [{
+        "id": p["id"],
+        "nombre": p["name"],
+        "vendedor": p["user_id"][1] if p.get("user_id") else "Sin vendedor",
+        "canal": p.get("x_studio_canal") or "Sin canal",
+        "tipo_comercio": p.get("x_studio_tipo_de_comercio") or "Sin tipo",
+    } for p in partners]
 
 
 def build_clientes_data(uid, models):
@@ -224,7 +372,7 @@ def build_clientes_data(uid, models):
     if order_ids:
         lineas = odoo_call(models, uid, "sale.order.line", "search_read",
             [["order_id", "in", order_ids]],
-            ["order_id", "product_id", "product_uom_qty", "price_subtotal"]
+            ["order_id", "product_id", "product_qty", "price_subtotal"]
         )
 
     prod_ids = list({l["product_id"][0] for l in lineas if l["product_id"]})
@@ -508,6 +656,16 @@ def get_clientes(force: bool = False):
     cache_set("clientes", data)
     return {"data": data, "cached": False, "ttl": CACHE_TTL}
 
+@app.get("/api/cartera")
+def get_cartera(force: bool = False):
+    cached = cache_get("cartera")
+    if cached and not force:
+        return {"data": cached, "cached": True, "ttl": CACHE_TTL}
+    uid, models = odoo_connect()
+    data = build_cartera_data(uid, models)
+    cache_set("cartera", data)
+    return {"data": data, "cached": False, "ttl": CACHE_TTL}
+
 @app.get("/api/status")
 def status():
     return {
@@ -528,12 +686,25 @@ def get_cobranzas(force: bool = False):
     cache_set("cobranzas", data)
     return {"data": data, "cached": False, "ttl": CACHE_TTL}
 
+@app.get("/api/dias-habiles")
+def get_dias_habiles():
+    """Días hábiles (lunes-viernes, excluyendo feriados nacionales AR) del
+    mes actual: transcurridos (incluyendo hoy), restantes y total del mes."""
+    transcurridos, restantes, total = dias_habiles_transcurridos_y_restantes()
+    return {
+        "transcurridos": transcurridos,
+        "restantes": restantes,
+        "total_mes": total,
+        "hoy": date.today().isoformat(),
+    }
+
 @app.get("/api/refresh")
 def refresh_all():
     uid, models = odoo_connect()
     cache_set("stock",      build_stock_data(uid, models))
     cache_set("ventas",     build_ventas_data(uid, models))
     cache_set("clientes",   build_clientes_data(uid, models))
+    cache_set("cartera",    build_cartera_data(uid, models))
     cache_set("cobranzas",  build_cobranzas_data(uid, models))
     return {"ok": True, "refreshed_at": datetime.now().isoformat()}
 

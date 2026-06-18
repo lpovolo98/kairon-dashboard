@@ -175,6 +175,61 @@ canvas { max-height: 220px; }
 .aging-60   { background:rgba(120,0,0,.15); color:#ff1a1a; border:1px solid rgba(120,0,0,.3); }
 @media(max-width:900px){.cobr-grid{grid-template-columns:1fr;}}
 
+/* ── Matriz ventas expandible ── */
+.mtx-row { cursor: pointer; }
+.mtx-row:hover { background: var(--bg3); }
+.mtx-toggle { display: inline-block; width: 16px; text-align: center; color: var(--accent2); font-size: 11px; transition: transform .15s; }
+.mtx-toggle.open { transform: rotate(90deg); }
+.mtx-level-0 td:first-child { font-weight: 800; font-size: 13px; color: var(--text); }
+.mtx-level-1 td:first-child { padding-left: 30px; font-weight: 600; font-size: 12px; color: var(--accent2); }
+.mtx-level-2 td:first-child { padding-left: 52px; font-size: 12px; color: var(--text); font-weight: 400; }
+.mtx-level-0 { background: rgba(62,207,178,.05); }
+.mtx-level-1 { background: rgba(255,255,255,.015); }
+.mtx-delta-up { color: var(--green); }
+.mtx-delta-down { color: var(--red); }
+.mtx-hidden { display: none; }
+
+/* ── Multiselect dropdown (proveedores) ── */
+.multiselect-wrap { position: relative; }
+.multiselect-btn {
+  text-align: left; min-width: 220px; display: flex; align-items: center;
+  justify-content: space-between; gap: 8px;
+}
+.multiselect-btn::after { content: '▾'; color: var(--muted); font-size: 10px; }
+.multiselect-dropdown {
+  display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 200;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px; min-width: 280px; max-height: 320px; overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.multiselect-dropdown.open { display: block; }
+.multiselect-option {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text);
+}
+.multiselect-option:hover { background: var(--bg3); }
+.multiselect-option input { accent-color: var(--accent2); cursor: pointer; }
+.multiselect-actions {
+  display: flex; gap: 8px; padding: 6px 10px 2px; border-top: 1px solid var(--border);
+  margin-top: 6px;
+}
+.multiselect-actions button {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--accent2);
+  font-size: 11px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+}
+
+/* ── Tendencia box ── */
+.tendencia-num { font-size: 30px; font-weight: 800; color: var(--accent2); }
+.tendencia-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.tendencia-detail { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.6; }
+.tendencia-row { display: flex; justify-content: space-between; padding: 3px 0; }
+
+/* ── Totalizador matriz ── */
+.mtx-total-row td {
+  background: var(--bg3); border-top: 2px solid var(--accent2);
+  font-weight: 800; font-size: 13px; padding: 12px 14px;
+}
+
 /* ── Loading / Empty ── */
 .loading { display: flex; align-items: center; justify-content: center; min-height: 260px; font-size: 13px; color: var(--muted); gap: 10px; }
 .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
@@ -259,25 +314,55 @@ canvas { max-height: 220px; }
 
 <!-- ══ VENTAS ══ -->
 <div class="panel" id="panel-ventas">
+  <div class="filters" style="margin-bottom:18px">
+    <span class="filter-label">Proveedor:</span>
+    <div class="multiselect-wrap" id="ventas-proveedor-wrap">
+      <button class="filter-select multiselect-btn" id="ventas-proveedor-btn" onclick="toggleProveedorDropdown()">Todos los proveedores</button>
+      <div class="multiselect-dropdown" id="ventas-proveedor-dropdown"></div>
+    </div>
+    <span class="filter-label">Mes:</span>
+    <select class="filter-select" id="ventas-mes" onchange="onVentasFiltroChange()">
+      <option value="">Todos (12 meses)</option>
+    </select>
+  </div>
+
   <div class="stats-row" id="ventas-stats"></div>
+
   <div class="chart-grid">
     <div class="chart-card">
-      <div class="chart-title">Cajas vendidas por mes <span>últimos 12 meses</span></div>
-      <canvas id="chart-cajas"></canvas>
+      <div class="chart-title">Facturación <span id="ventas-chart-sub3">evolución mensual</span></div>
+      <canvas id="chart-facturacion"></canvas>
     </div>
     <div class="chart-card">
-      <div class="chart-title">Clientes compradores <span>por mes</span></div>
-      <canvas id="chart-clientes"></canvas>
+      <div class="chart-title">Cajas vendidas por mes <span id="ventas-chart-sub">últimos 12 meses</span></div>
+      <canvas id="chart-cajas"></canvas>
     </div>
   </div>
-  <div class="filters">
-    <span class="filter-label">Mes:</span>
-    <select class="filter-select" id="ventas-mes" onchange="renderVentasDetalle()"><option value="">Todos</option></select>
-    <span class="filter-label">Categoría:</span>
-    <select class="filter-select" id="ventas-categ" onchange="renderVentasDetalle()"><option value="">Todas</option></select>
+  <div class="chart-grid">
+    <div class="chart-card">
+      <div class="chart-title">Clientes compradores <span id="ventas-chart-sub2">por mes</span></div>
+      <canvas id="chart-clientes"></canvas>
+    </div>
+    <div class="chart-card" style="display:flex;flex-direction:column;justify-content:center">
+      <div class="chart-title">Tendencia del mes en curso</div>
+      <div id="tendencia-box"></div>
+    </div>
   </div>
-  <div class="table-wrap" id="ventas-table-wrap">
+
+  <div class="filters" style="margin-top:24px">
+    <span class="filter-label" style="font-size:13px;font-weight:700;color:var(--text)">Matriz Proveedor · Categoría · Artículo</span>
+    <button class="btn-refresh" style="margin-left:auto" onclick="toggleExpandAll()">↕ Expandir/Contraer todo</button>
+  </div>
+  <div class="table-wrap" id="ventas-matriz-wrap">
     <div class="loading"><div class="spinner"></div>Cargando ventas...</div>
+  </div>
+
+  <div class="filters" style="margin-top:24px">
+    <span class="filter-label" style="font-size:13px;font-weight:700;color:var(--text)">Matriz Vendedor · Canal · Tipo de Comercio</span>
+    <button class="btn-refresh" style="margin-left:auto" onclick="toggleExpandAllCartera()">↕ Expandir/Contraer todo</button>
+  </div>
+  <div class="table-wrap" id="ventas-matriz-cartera-wrap">
+    <div class="loading"><div class="spinner"></div>Cargando cartera...</div>
   </div>
 </div>
 
@@ -359,12 +444,15 @@ canvas { max-height: 220px; }
 const PROD_MAP = {
   "Alfajor Emilio Maicena 72gr X 12u.":             { proveedor: "CIBOS SRL",                       segmento: "Alfajores" },
   "Cerveza Birrazz 4x6x710ML":                      { proveedor: "DASBURG SA",                      segmento: "Cervezas" },
+  "Cerveza Dasburg 4x6x710ML":                      { proveedor: "DASBURG SA",                      segmento: "Cervezas" },
+  "Cerveza Dasburg 4x6x473ML":                      { proveedor: "DASBURG SA",                      segmento: "Cervezas" },
   "Fernet Branca 750 ml":                           { proveedor: "VARIETALES BELGRANO",              segmento: "Aperitivos" },
   "Jugo en Polvo Winners Manzana x10u":             { proveedor: "DASBURG SA",                      segmento: "Jugos en polvo" },
   "Jugo en Polvo Winners Mix Frutal x10u":          { proveedor: "DASBURG SA",                      segmento: "Jugos en polvo" },
   "Jugo en Polvo Winners Naranja Dulce x10u":       { proveedor: "DASBURG SA",                      segmento: "Jugos en polvo" },
   "Jugo en Polvo Winners Naranja x10u":             { proveedor: "DASBURG SA",                      segmento: "Jugos en polvo" },
   "Murken Clásicas Corte Americano 36GRX66":        { proveedor: "ALIMENTOS ARGENTINOS NUTREGAL SA", segmento: "Clásicas" },
+  "Murken Clásicas Corte Americano 36GRX60":        { proveedor: "ALIMENTOS ARGENTINOS NUTREGAL SA", segmento: "Clásicas" },
   "Murken Clásicas Corte Americano 80GRX16":        { proveedor: "ALIMENTOS ARGENTINOS NUTREGAL SA", segmento: "Clásicas" },
   "Murken Clásicas Corte Liso 36GRX60":             { proveedor: "ALIMENTOS ARGENTINOS NUTREGAL SA", segmento: "Clásicas" },
   "Murken Clásicas Corte Liso 80GRX16":             { proveedor: "ALIMENTOS ARGENTINOS NUTREGAL SA", segmento: "Clásicas" },
@@ -383,6 +471,7 @@ const PROD_MAP = {
   "WAKAS Pasta Penne Rigate Quinoa 12u x 300gr":    { proveedor: "WAKAS SA",                        segmento: "Pasta Multicereal" },
 };
 const CATEGS_EXCLUIDAS = ["MATERIAL POP", "Servicios logísticos", "Servicios logisticos"];
+const NOMBRES_EXCLUIDOS = ["Servicio Logístico", "Servicio Logistico", "Standard delivery"];
 
 // ── State ─────────────────────────────────────────────────
 const API = window.location.origin;
@@ -408,6 +497,7 @@ function showTab(name) {
 function enrichStock(data) {
   return data
     .filter(d => !CATEGS_EXCLUIDAS.some(c => d.categoria.toLowerCase() === c.toLowerCase()))
+    .filter(d => !NOMBRES_EXCLUIDOS.some(n => d.nombre.toLowerCase() === n.toLowerCase()))
     .map(d => {
       const info = PROD_MAP[d.nombre] || {};
       return { ...d, proveedor: info.proveedor || 'Sin proveedor', segmento: info.segmento || 'Sin segmento' };
@@ -614,60 +704,236 @@ function generarExcel() {
 }
 
 // ── VENTAS ───────────────────────────────────────────────
+let ventasRaw = [];          // filas crudas desde backend (1 por línea de venta)
+let ventasFiltered = [];     // tras filtro de proveedor/mes
+let expandedNodes = new Set();
+let allExpanded = false;
+let proveedoresSeleccionados = new Set();  // vacío = todos
+let diasHabilesInfo = null;  // { transcurridos, restantes, total_mes, hoy }
+let chartFacturacion = null;
+let carteraRaw = [];          // clientes en cartera (vendedor, canal, tipo) — fijo, no depende del filtro de fecha
+let expandedNodesCartera = new Set();
+let allExpandedCartera = false;
+
+function enrichVentaRow(row) {
+  const info = PROD_MAP[row.producto] || {};
+  return { ...row, proveedor: info.proveedor || 'Sin proveedor', segmento: info.segmento || 'Sin segmento' };
+}
+
 async function loadVentas() {
   try {
-    const r = await fetch(`${API}/api/ventas`);
-    const j = await r.json();
-    ventasData = j.data || [];
+    const [rVentas, rDias, rCartera] = await Promise.all([
+      fetch(`${API}/api/ventas`),
+      fetch(`${API}/api/dias-habiles`).catch(() => null),
+      fetch(`${API}/api/cartera`).catch(() => null)
+    ]);
+    const j = await rVentas.json();
+    ventasRaw = (j.data || [])
+      .map(enrichVentaRow)
+      .filter(d => !CATEGS_EXCLUIDAS.some(c => d.categoria.toLowerCase() === c.toLowerCase()))
+      .filter(d => !NOMBRES_EXCLUIDOS.some(n => d.producto.toLowerCase() === n.toLowerCase()));
+
+    if (rDias) {
+      try { diasHabilesInfo = await rDias.json(); } catch(e) { diasHabilesInfo = null; }
+    }
+    if (rCartera) {
+      try { const jc = await rCartera.json(); carteraRaw = jc.data || []; } catch(e) { carteraRaw = []; }
+    }
+
     populateVentasFiltros();
-    renderVentasStats();
-    renderVentasCharts();
-    renderVentasDetalle();
+    applyVentasFiltro();
   } catch(e) {
-    document.getElementById('ventas-table-wrap').innerHTML = '<div class="empty">Error al cargar ventas</div>';
+    document.getElementById('ventas-matriz-wrap').innerHTML = '<div class="empty">Error al cargar ventas</div>';
   }
 }
+
+// ── Multiselect de proveedores ───────────────────────────
 function populateVentasFiltros() {
-  const meses = ventasData.map(d => d.mes).sort().reverse();
+  const provs = [...new Set(ventasRaw.map(d => d.proveedor))].sort();
+  renderProveedorDropdown(provs);
+
+  const meses = [...new Set(ventasRaw.map(d => d.mes))].sort().reverse();
   document.getElementById('ventas-mes').innerHTML =
-    '<option value="">Todos</option>' + meses.map(m => `<option value="${m}">${formatMes(m)}</option>`).join('');
-  const cats = new Set();
-  ventasData.forEach(d => Object.keys(d.categorias).forEach(c => cats.add(c)));
-  document.getElementById('ventas-categ').innerHTML =
-    '<option value="">Todas</option>' + [...cats].sort().map(c => `<option value="${c}">${c}</option>`).join('');
+    '<option value="">Todos (12 meses)</option>' + meses.map(m => `<option value="${m}">${formatMes(m)}</option>`).join('');
 }
+
+function renderProveedorDropdown(provs) {
+  const dd = document.getElementById('ventas-proveedor-dropdown');
+  const options = provs.map(p => {
+    const checked = proveedoresSeleccionados.has(p) ? 'checked' : '';
+    const id = 'prov_' + p.replace(/[^a-zA-Z0-9]/g,'_');
+    return `<label class="multiselect-option" for="${id}">
+      <input type="checkbox" id="${id}" value="${p}" ${checked} onchange="onProveedorCheckChange('${p}', this.checked)">
+      ${p}
+    </label>`;
+  }).join('');
+  dd.innerHTML = options + `
+    <div class="multiselect-actions">
+      <button onclick="seleccionarTodosProveedores()">Todos</button>
+      <button onclick="limpiarProveedores()">Limpiar</button>
+      <button onclick="toggleProveedorDropdown()">Cerrar</button>
+    </div>`;
+}
+
+function toggleProveedorDropdown() {
+  document.getElementById('ventas-proveedor-dropdown').classList.toggle('open');
+}
+
+function onProveedorCheckChange(prov, checked) {
+  if (checked) proveedoresSeleccionados.add(prov);
+  else proveedoresSeleccionados.delete(prov);
+  updateProveedorBtnLabel();
+  onVentasFiltroChange();
+}
+
+function seleccionarTodosProveedores() {
+  const provs = [...new Set(ventasRaw.map(d => d.proveedor))];
+  proveedoresSeleccionados = new Set(provs);
+  renderProveedorDropdown(provs.sort());
+  updateProveedorBtnLabel();
+  onVentasFiltroChange();
+}
+
+function limpiarProveedores() {
+  proveedoresSeleccionados.clear();
+  const provs = [...new Set(ventasRaw.map(d => d.proveedor))].sort();
+  renderProveedorDropdown(provs);
+  updateProveedorBtnLabel();
+  onVentasFiltroChange();
+}
+
+function updateProveedorBtnLabel() {
+  const btn = document.getElementById('ventas-proveedor-btn');
+  const n = proveedoresSeleccionados.size;
+  if (n === 0) btn.textContent = 'Todos los proveedores';
+  else if (n === 1) btn.textContent = [...proveedoresSeleccionados][0];
+  else btn.textContent = `${n} proveedores seleccionados`;
+}
+
+// Cerrar dropdown al clickear afuera
+document.addEventListener('click', (e) => {
+  const wrap = document.getElementById('ventas-proveedor-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    document.getElementById('ventas-proveedor-dropdown')?.classList.remove('open');
+  }
+});
+
+function getProveedoresFiltro() {
+  // Set vacío significa "todos"
+  return proveedoresSeleccionados.size === 0 ? null : proveedoresSeleccionados;
+}
+
+function onVentasFiltroChange() {
+  applyVentasFiltro();
+}
+
+function applyVentasFiltro() {
+  const provsSel = getProveedoresFiltro();
+  const mes  = document.getElementById('ventas-mes').value;
+
+  ventasFiltered = ventasRaw.filter(d =>
+    (!provsSel || provsSel.has(d.proveedor)) &&
+    (!mes  || d.mes === mes)
+  );
+
+  document.getElementById('ventas-chart-sub').textContent  = mes ? formatMes(mes) : 'últimos 12 meses';
+  document.getElementById('ventas-chart-sub2').textContent = mes ? formatMes(mes) : 'por mes';
+  document.getElementById('ventas-chart-sub3').textContent = mes ? formatMes(mes) : 'evolución mensual';
+
+  renderVentasStats();
+  renderVentasCharts();
+  renderTendencia();
+  renderVentasMatriz();
+  renderMatrizCartera();
+}
+
+function getBaseFiltrada() {
+  const provsSel = getProveedoresFiltro();
+  return ventasRaw.filter(d => !provsSel || provsSel.has(d.proveedor));
+}
+
 function renderVentasStats() {
-  const last = ventasData[ventasData.length-1] || {};
-  const prev = ventasData[ventasData.length-2] || {};
-  const total = ventasData.reduce((s,d) => s + d.cajas_vendidas, 0);
-  const maxC  = Math.max(...ventasData.map(d => d.clientes_compradores));
+  const base = getBaseFiltrada();
+
+  const porMes = {};
+  base.forEach(d => {
+    if (!porMes[d.mes]) porMes[d.mes] = { clientes: new Set(), cajas: 0, monto: 0, ordenesPorCliente: {} };
+    porMes[d.mes].clientes.add(d.partner_id);
+    porMes[d.mes].cajas += d.cajas;
+    porMes[d.mes].monto += d.monto_total;
+    porMes[d.mes].ordenesPorCliente[d.partner_id] = (porMes[d.mes].ordenesPorCliente[d.partner_id]||0) + 1;
+  });
+
+  const mesesOrdenados = Object.keys(porMes).sort();
+  const ultimoMes = mesesOrdenados[mesesOrdenados.length-1];
+  const penultimo  = mesesOrdenados[mesesOrdenados.length-2];
+  const last = porMes[ultimoMes] || {clientes:new Set(),cajas:0,monto:0,ordenesPorCliente:{}};
+  const prev = porMes[penultimo] || {cajas:0,monto:0};
+  const totalCajas = Object.values(porMes).reduce((s,m)=>s+m.cajas,0);
+  const maxClientes = Math.max(...mesesOrdenados.map(m=>porMes[m].clientes.size), 0);
+  const recompra = Object.values(last.ordenesPorCliente||{}).filter(c=>c>1).length;
+
   document.getElementById('ventas-stats').innerHTML = `
     <div class="stat-card accent-yellow">
       <div class="stat-label">Clientes compradores</div>
-      <div class="stat-value" style="color:var(--accent)">${last.clientes_compradores||0}</div>
-      <div class="stat-sub">este mes · máx: ${maxC}</div>
+      <div class="stat-value" style="color:var(--accent)">${last.clientes.size}</div>
+      <div class="stat-sub">este mes · máx: ${maxClientes}</div>
     </div>
     <div class="stat-card accent-teal">
       <div class="stat-label">Cajas vendidas (mes)</div>
-      <div class="stat-value" style="color:var(--accent2)">${fmt(last.cajas_vendidas||0)}</div>
-      <div class="stat-sub">vs ${fmt(prev.cajas_vendidas||0)} mes anterior</div>
+      <div class="stat-value" style="color:var(--accent2)">${fmt(last.cajas)}</div>
+      <div class="stat-sub">vs ${fmt(prev.cajas)} mes anterior</div>
+    </div>
+    <div class="stat-card accent-green">
+      <div class="stat-label">Facturación (mes)</div>
+      <div class="stat-value" style="color:#3ecfb2;font-size:20px">$${fmtMoney(last.monto)}</div>
+      <div class="stat-sub">vs $${fmtMoney(prev.monto)} mes anterior</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Cajas acumuladas (año)</div>
-      <div class="stat-value">${fmt(total)}</div>
+      <div class="stat-value">${fmt(totalCajas)}</div>
       <div class="stat-sub">últimos 12 meses</div>
     </div>
     <div class="stat-card accent-purple">
       <div class="stat-label">Recompra (mes actual)</div>
-      <div class="stat-value" style="color:var(--accent3)">${last.clientes_recompra||0}</div>
+      <div class="stat-value" style="color:var(--accent3)">${recompra}</div>
       <div class="stat-sub">clientes con 2+ pedidos</div>
     </div>`;
 }
+
 function renderVentasCharts() {
-  const labels = ventasData.map(d => formatMes(d.mes));
+  const base = getBaseFiltrada();
+
+  const porMes = {};
+  base.forEach(d => {
+    if (!porMes[d.mes]) porMes[d.mes] = { clientes: new Set(), cajas: 0, monto: 0 };
+    porMes[d.mes].clientes.add(d.partner_id);
+    porMes[d.mes].cajas += d.cajas;
+    porMes[d.mes].monto += d.monto_total;
+  });
+  const meses = Object.keys(porMes).sort();
+  const labels = meses.map(formatMes);
+  const cajas  = meses.map(m => Math.round(porMes[m].cajas));
+  const clis   = meses.map(m => porMes[m].clientes.size);
+  const montos = meses.map(m => Math.round(porMes[m].monto));
+
+  // Proyección de facturación para el mes en curso (si no terminó)
+  const mesActualStr = new Date().toISOString().slice(0,7);
+  let montosProyectados = [...montos];
+  if (diasHabilesInfo && meses.includes(mesActualStr) && diasHabilesInfo.restantes > 0) {
+    const idx = meses.indexOf(mesActualStr);
+    const montoActual = porMes[mesActualStr].monto;
+    const diasTr = diasHabilesInfo.transcurridos || 1;
+    const promedioDiario = montoActual / diasTr;
+    const proyectado = montoActual + (promedioDiario * diasHabilesInfo.restantes);
+    montosProyectados[idx] = Math.round(proyectado);
+  }
+
   if (chartCajas) chartCajas.destroy();
   if (chartClientes) chartClientes.destroy();
-  const base = {
+  if (chartFacturacion) chartFacturacion.destroy();
+
+  const base_opts = {
     responsive:true, maintainAspectRatio:true,
     plugins:{legend:{display:false}},
     scales:{
@@ -675,20 +941,364 @@ function renderVentasCharts() {
       y:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}}
     }
   };
-  chartCajas = new Chart(document.getElementById('chart-cajas'),{type:'bar',data:{labels,datasets:[{data:ventasData.map(d=>d.cajas_vendidas),backgroundColor:'rgba(62,207,178,.25)',borderColor:'#3ecfb2',borderWidth:1.5,borderRadius:4}]},options:{...base}});
-  chartClientes = new Chart(document.getElementById('chart-clientes'),{type:'line',data:{labels,datasets:[{data:ventasData.map(d=>d.clientes_compradores),borderColor:'#f5c842',borderWidth:2,pointBackgroundColor:'#f5c842',tension:.3,fill:true,backgroundColor:'rgba(245,200,66,.06)'}]},options:{...base}});
+
+  chartCajas = new Chart(document.getElementById('chart-cajas'),{type:'bar',data:{labels,datasets:[{data:cajas,backgroundColor:'rgba(62,207,178,.25)',borderColor:'#3ecfb2',borderWidth:1.5,borderRadius:4}]},options:{...base_opts}});
+  chartClientes = new Chart(document.getElementById('chart-clientes'),{type:'line',data:{labels,datasets:[{data:clis,borderColor:'#f5c842',borderWidth:2,pointBackgroundColor:'#f5c842',tension:.3,fill:true,backgroundColor:'rgba(245,200,66,.06)'}]},options:{...base_opts}});
+
+  // Gráfico de facturación: barra real + barra proyectada (solo difiere en el último mes)
+  const esProyectado = meses.map(m => m === mesActualStr && montosProyectados[meses.indexOf(m)] !== montos[meses.indexOf(m)]);
+  chartFacturacion = new Chart(document.getElementById('chart-facturacion'), {
+    data: {
+      labels,
+      datasets: [
+        { type:'bar', label:'Real', data: montos, backgroundColor:'rgba(62,207,178,.35)', borderColor:'#3ecfb2', borderWidth:1.5, borderRadius:4 },
+        { type:'bar', label:'Proyectado', data: montosProyectados.map((v,i)=> esProyectado[i] ? v - montos[i] : 0), backgroundColor:'rgba(245,200,66,.25)', borderColor:'#f5c842', borderWidth:1.5, borderDash:[4,3], borderRadius:4 },
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:true,
+      plugins:{
+        legend:{display:true, labels:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: $${fmtMoney(ctx.raw)}`}}
+      },
+      scales:{
+        x:{stacked:true, grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        y:{stacked:true, grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:9},callback:v=>'$'+fmtMoney(v)}}
+      }
+    }
+  });
 }
-function renderVentasDetalle() {
-  const mesF  = document.getElementById('ventas-mes').value;
-  const catF  = document.getElementById('ventas-categ').value;
-  let data = mesF ? ventasData.filter(d=>d.mes===mesF) : ventasData;
-  if (!data.length){document.getElementById('ventas-table-wrap').innerHTML='<div class="empty">Sin datos</div>';return;}
-  const rows = data.map(d=>{
-    const cajas = catF && d.categorias[catF]!==undefined ? d.categorias[catF] : d.cajas_vendidas;
-    const pct = d.clientes_compradores>0 ? Math.round(d.clientes_recompra/d.clientes_compradores*100):0;
-    return `<tr><td class="td-name">${formatMes(d.mes)}</td><td class="td-num">${d.clientes_compradores}</td><td class="td-num">${fmt(cajas)}</td><td class="td-num">$${fmtMoney(d.monto_total)}</td><td class="td-num">${d.clientes_recompra} <span class="td-muted">(${pct}%)</span></td></tr>`;
-  }).join('');
-  document.getElementById('ventas-table-wrap').innerHTML=`<table><thead><tr><th>Mes</th><th class="td-num">Clientes</th><th class="td-num">Cajas${catF?' · '+catF:''}</th><th class="td-num">Monto total</th><th class="td-num">Recompra</th></tr></thead><tbody>${rows}</tbody></table>`;
+
+// ── Tendencia del mes (venta tendenciada en cajas) ───────
+function renderTendencia() {
+  const box = document.getElementById('tendencia-box');
+  if (!diasHabilesInfo) {
+    box.innerHTML = '<div class="td-muted" style="font-size:12px">No se pudo calcular días hábiles (API de feriados no disponible)</div>';
+    return;
+  }
+  const base = getBaseFiltrada();
+  const mesActualStr = new Date().toISOString().slice(0,7);
+  const datosDelMes = base.filter(d => d.mes === mesActualStr);
+  const cajasDelMes = datosDelMes.reduce((s,d)=>s+d.cajas, 0);
+  const montoDelMes = datosDelMes.reduce((s,d)=>s+d.monto_total, 0);
+
+  const { transcurridos, restantes, total_mes } = diasHabilesInfo;
+  const cajasPromDiario = transcurridos > 0 ? cajasDelMes / transcurridos : 0;
+  const montoPromDiario = transcurridos > 0 ? montoDelMes / transcurridos : 0;
+  const cajasTendencia = cajasDelMes + (cajasPromDiario * restantes);
+  const montoTendencia = montoDelMes + (montoPromDiario * restantes);
+
+  box.innerHTML = `
+    <div class="tendencia-num">${fmt(cajasTendencia)} <span style="font-size:14px;color:var(--muted);font-weight:500">cajas</span></div>
+    <div class="tendencia-label">Venta tendenciada — ${formatMes(mesActualStr)}</div>
+    <div class="tendencia-detail">
+      <div class="tendencia-row"><span>Cajas vendidas a hoy</span><span style="color:var(--text)">${fmt(cajasDelMes)}</span></div>
+      <div class="tendencia-row"><span>Promedio diario hábil</span><span style="color:var(--text)">${fmt(cajasPromDiario)}</span></div>
+      <div class="tendencia-row"><span>Días hábiles transcurridos</span><span style="color:var(--text)">${transcurridos} / ${total_mes}</span></div>
+      <div class="tendencia-row"><span>Días hábiles restantes</span><span style="color:var(--accent2)">${restantes}</span></div>
+      <div class="tendencia-row" style="border-top:1px solid var(--border);margin-top:6px;padding-top:8px">
+        <span>Facturación tendenciada</span><span style="color:var(--accent2);font-weight:700">$${fmtMoney(montoTendencia)}</span>
+      </div>
+    </div>`;
+}
+
+// ── Matriz Proveedor > Categoría > Artículo ──────────────
+function getMesesContext() {
+  const meses = [...new Set(ventasRaw.map(d => d.mes))].sort();
+  const mesFiltro = document.getElementById('ventas-mes').value;
+  const mesActual = mesFiltro || meses[meses.length - 1];
+  const idx = meses.indexOf(mesActual);
+  const mesAnterior = idx > 0 ? meses[idx-1] : null;
+  const ultimos3 = meses.slice(Math.max(0, idx-3), idx);
+  return { mesActual, mesAnterior, ultimos3 };
+}
+
+function renderVentasMatriz() {
+  const { mesActual, mesAnterior, ultimos3 } = getMesesContext();
+  const data = getBaseFiltrada();
+
+  if (!data.length) {
+    document.getElementById('ventas-matriz-wrap').innerHTML = '<div class="empty">Sin datos para mostrar</div>';
+    return;
+  }
+
+  // Facturación total del recorte actual (proveedor + mes si aplica) — para % de peso
+  const dataDelMes = data.filter(d => d.mes === mesActual);
+  const facturacionTotalRecorte = dataDelMes.reduce((s,d) => s + d.monto_total, 0) || 1;
+
+  const tree = {};
+  data.forEach(d => {
+    if (!tree[d.proveedor]) tree[d.proveedor] = {};
+    if (!tree[d.proveedor][d.categoria]) tree[d.proveedor][d.categoria] = {};
+    if (!tree[d.proveedor][d.categoria][d.producto]) tree[d.proveedor][d.categoria][d.producto] = [];
+    tree[d.proveedor][d.categoria][d.producto].push(d);
+  });
+
+  function metrics(rows) {
+    const mActual = rows.filter(r => r.mes === mesActual);
+    const mAnt    = rows.filter(r => mesAnterior && r.mes === mesAnterior);
+    const m3      = rows.filter(r => ultimos3.includes(r.mes));
+
+    const cajasActual = mActual.reduce((s,r)=>s+r.cajas,0);
+    const cajasAnt     = mAnt.reduce((s,r)=>s+r.cajas,0);
+    const cajasProm3   = ultimos3.length ? m3.reduce((s,r)=>s+r.cajas,0) / ultimos3.length : 0;
+    const clientesActual = new Set(mActual.map(r=>r.partner_id)).size;
+    const clientesAnt     = new Set(mAnt.map(r=>r.partner_id)).size;
+    const facturacion = mActual.reduce((s,r)=>s+r.monto_total,0);
+    const pesoPct = facturacionTotalRecorte > 0 ? (facturacion / facturacionTotalRecorte * 100) : 0;
+
+    return { cajasActual, cajasAnt, cajasProm3, clientesActual, clientesAnt, facturacion, pesoPct };
+  }
+
+  function deltaArrow(actual, anterior) {
+    if (anterior === 0 && actual === 0) return '';
+    if (anterior === 0) return '<span class="mtx-delta-up">▲ nuevo</span>';
+    const pct = Math.round((actual - anterior) / anterior * 100);
+    if (pct > 0) return `<span class="mtx-delta-up">▲ ${pct}%</span>`;
+    if (pct < 0) return `<span class="mtx-delta-down">▼ ${Math.abs(pct)}%</span>`;
+    return `<span class="td-muted">= 0%</span>`;
+  }
+
+  let html = `<table><thead><tr>
+    <th style="min-width:260px">Proveedor / Categoría / Artículo</th>
+    <th class="td-num">Cajas ${formatMes(mesActual)}</th>
+    <th class="td-num">vs mes ant.</th>
+    <th class="td-num">Cajas ${mesAnterior?formatMes(mesAnterior):'mes ant.'}</th>
+    <th class="td-num">Prom. 3m</th>
+    <th class="td-num">Clientes ${formatMes(mesActual)}</th>
+    <th class="td-num">Clientes mes ant.</th>
+    <th class="td-num">Facturación $</th>
+    <th class="td-num">% del total</th>
+  </tr></thead><tbody>`;
+
+  Object.keys(tree).sort().forEach(provName => {
+    const provId = 'p_' + provName.replace(/[^a-zA-Z0-9]/g,'_');
+    const provRows = Object.values(tree[provName]).flatMap(c => Object.values(c).flat());
+    const pm = metrics(provRows);
+    const provOpen = expandedNodes.has(provId);
+
+    html += `<tr class="mtx-row mtx-level-0" onclick="toggleNode('${provId}')">
+      <td><span class="mtx-toggle ${provOpen?'open':''}" id="tgl_${provId}">▸</span>${provName}</td>
+      <td class="td-num">${fmt(pm.cajasActual)}</td>
+      <td class="td-num">${deltaArrow(pm.cajasActual, pm.cajasAnt)}</td>
+      <td class="td-num">${fmt(pm.cajasAnt)}</td>
+      <td class="td-num">${fmt(pm.cajasProm3)}</td>
+      <td class="td-num">${pm.clientesActual}</td>
+      <td class="td-num">${pm.clientesAnt}</td>
+      <td class="td-num">$${fmtMoney(pm.facturacion)}</td>
+      <td class="td-num">${pm.pesoPct.toFixed(1)}%</td>
+    </tr>`;
+
+    Object.keys(tree[provName]).sort().forEach(categName => {
+      const categId = provId + '_c_' + categName.replace(/[^a-zA-Z0-9]/g,'_');
+      const categRows = Object.values(tree[provName][categName]).flat();
+      const cm = metrics(categRows);
+      const categOpen = expandedNodes.has(categId);
+      const categHidden = !provOpen ? 'mtx-hidden' : '';
+
+      html += `<tr class="mtx-row mtx-level-1 ${categHidden}" data-parent="${provId}" onclick="toggleNode('${categId}')">
+        <td><span class="mtx-toggle ${categOpen?'open':''}" id="tgl_${categId}">▸</span>${categName}</td>
+        <td class="td-num">${fmt(cm.cajasActual)}</td>
+        <td class="td-num">${deltaArrow(cm.cajasActual, cm.cajasAnt)}</td>
+        <td class="td-num">${fmt(cm.cajasAnt)}</td>
+        <td class="td-num">${fmt(cm.cajasProm3)}</td>
+        <td class="td-num">${cm.clientesActual}</td>
+        <td class="td-num">${cm.clientesAnt}</td>
+        <td class="td-num">$${fmtMoney(cm.facturacion)}</td>
+        <td class="td-num">${cm.pesoPct.toFixed(1)}%</td>
+      </tr>`;
+
+      Object.keys(tree[provName][categName]).sort().forEach(prodName => {
+        const prodRows = tree[provName][categName][prodName];
+        const prm = metrics(prodRows);
+        const prodHidden = (!provOpen || !categOpen) ? 'mtx-hidden' : '';
+        const codigo = prodRows[0]?.codigo || '';
+
+        html += `<tr class="mtx-level-2 ${prodHidden}" data-parent="${categId}">
+          <td><span class="td-muted" style="font-size:10px;margin-right:6px">${codigo}</span>${prodName}</td>
+          <td class="td-num">${fmt(prm.cajasActual)}</td>
+          <td class="td-num">${deltaArrow(prm.cajasActual, prm.cajasAnt)}</td>
+          <td class="td-num">${fmt(prm.cajasAnt)}</td>
+          <td class="td-num">${fmt(prm.cajasProm3)}</td>
+          <td class="td-num">${prm.clientesActual}</td>
+          <td class="td-num">${prm.clientesAnt}</td>
+          <td class="td-num">$${fmtMoney(prm.facturacion)}</td>
+          <td class="td-num">${prm.pesoPct.toFixed(1)}%</td>
+        </tr>`;
+      });
+    });
+  });
+
+  // Fila de totalizador
+  html += `<tr class="mtx-total-row">
+    <td>TOTAL ${proveedoresSeleccionados.size > 0 ? '(filtro aplicado)' : ''}</td>
+    <td class="td-num"></td><td class="td-num"></td><td class="td-num"></td><td class="td-num"></td>
+    <td class="td-num"></td><td class="td-num"></td>
+    <td class="td-num">$${fmtMoney(facturacionTotalRecorte)}</td>
+    <td class="td-num">100%</td>
+  </tr>`;
+
+  html += '</tbody></table>';
+  document.getElementById('ventas-matriz-wrap').innerHTML = html;
+}
+
+function toggleNode(nodeId) {
+  if (expandedNodes.has(nodeId)) expandedNodes.delete(nodeId);
+  else expandedNodes.add(nodeId);
+  renderVentasMatriz();
+}
+
+function toggleExpandAll() {
+  if (allExpanded) {
+    expandedNodes.clear();
+  } else {
+    const data = getBaseFiltrada();
+    data.forEach(d => {
+      const provId = 'p_' + d.proveedor.replace(/[^a-zA-Z0-9]/g,'_');
+      const categId = provId + '_c_' + d.categoria.replace(/[^a-zA-Z0-9]/g,'_');
+      expandedNodes.add(provId);
+      expandedNodes.add(categId);
+    });
+  }
+  allExpanded = !allExpanded;
+  renderVentasMatriz();
+}
+
+// ── Matriz Vendedor > Canal > Tipo de Comercio ───────────
+// Cartera (vendedor/canal/tipo) es FIJA, no se afecta por el filtro de fecha.
+// "Clientes con compra" SÍ se afecta por el filtro de mes + proveedor: se
+// calcula dinámicamente a partir de las líneas de venta filtradas (getBaseFiltrada),
+// nunca desde un campo estático del cliente.
+function renderMatrizCartera() {
+  const wrap = document.getElementById('ventas-matriz-cartera-wrap');
+  if (!wrap) return;
+  if (!carteraRaw.length) {
+    wrap.innerHTML = '<div class="empty">Sin datos de cartera</div>';
+    return;
+  }
+
+  // dataVentasFiltrada ya viene filtrada por proveedor + mes (si corresponde)
+  // desde getBaseFiltrada + el filtro de mes aplicado en applyVentasFiltro.
+  const mesFiltro = document.getElementById('ventas-mes').value;
+  const dataVentasFiltrada = getBaseFiltrada().filter(d => !mesFiltro || d.mes === mesFiltro);
+
+  // Set de partner_ids que compraron, dentro del recorte actual (mes + proveedor)
+  const clientesQueCompraron = new Set(dataVentasFiltrada.map(d => d.partner_id));
+  // Cajas vendidas por partner_id, dentro del recorte actual
+  const cajasPorCliente = {};
+  dataVentasFiltrada.forEach(d => {
+    cajasPorCliente[d.partner_id] = (cajasPorCliente[d.partner_id] || 0) + d.cajas;
+  });
+
+  // Construir árbol: vendedor -> canal -> tipo_comercio -> [clientes de cartera]
+  const tree = {};
+  carteraRaw.forEach(c => {
+    if (!tree[c.vendedor]) tree[c.vendedor] = {};
+    if (!tree[c.vendedor][c.canal]) tree[c.vendedor][c.canal] = {};
+    if (!tree[c.vendedor][c.canal][c.tipo_comercio]) tree[c.vendedor][c.canal][c.tipo_comercio] = [];
+    tree[c.vendedor][c.canal][c.tipo_comercio].push(c);
+  });
+
+  function metricsCartera(clientesNodo) {
+    const cartera = clientesNodo.length;
+    const compradores = clientesNodo.filter(c => clientesQueCompraron.has(c.id)).length;
+    const cobertura = cartera > 0 ? (compradores / cartera * 100) : 0;
+    const cajas = clientesNodo.reduce((s,c) => s + (cajasPorCliente[c.id] || 0), 0);
+    const cajasPorCCC = compradores > 0 ? cajas / compradores : 0;
+    return { cartera, compradores, cobertura, cajas, cajasPorCCC };
+  }
+
+  let html = `<table><thead><tr>
+    <th style="min-width:260px">Vendedor / Canal / Tipo de Comercio</th>
+    <th class="td-num">Clientes en cartera</th>
+    <th class="td-num">Clientes con compra</th>
+    <th class="td-num">Cobertura %</th>
+    <th class="td-num">Cajas vendidas</th>
+    <th class="td-num">Cajas / CCC</th>
+  </tr></thead><tbody>`;
+
+  Object.keys(tree).sort().forEach(vendedor => {
+    const vId = 'v_' + vendedor.replace(/[^a-zA-Z0-9]/g,'_');
+    const clientesVendedor = Object.values(tree[vendedor]).flatMap(canal => Object.values(canal).flat());
+    const vm = metricsCartera(clientesVendedor);
+    const vOpen = expandedNodesCartera.has(vId);
+
+    html += `<tr class="mtx-row mtx-level-0" onclick="toggleNodeCartera('${vId}')">
+      <td><span class="mtx-toggle ${vOpen?'open':''}" id="tglc_${vId}">▸</span>${vendedor}</td>
+      <td class="td-num">${vm.cartera}</td>
+      <td class="td-num">${vm.compradores}</td>
+      <td class="td-num">${vm.cobertura.toFixed(1)}%</td>
+      <td class="td-num">${fmt(vm.cajas)}</td>
+      <td class="td-num">${fmt(vm.cajasPorCCC)}</td>
+    </tr>`;
+
+    Object.keys(tree[vendedor]).sort().forEach(canal => {
+      const cId = vId + '_c_' + canal.replace(/[^a-zA-Z0-9]/g,'_');
+      const clientesCanal = Object.values(tree[vendedor][canal]).flat();
+      const cm = metricsCartera(clientesCanal);
+      const cOpen = expandedNodesCartera.has(cId);
+      const cHidden = !vOpen ? 'mtx-hidden' : '';
+
+      html += `<tr class="mtx-row mtx-level-1 ${cHidden}" data-parent="${vId}" onclick="toggleNodeCartera('${cId}')">
+        <td><span class="mtx-toggle ${cOpen?'open':''}" id="tglc_${cId}">▸</span>${canal}</td>
+        <td class="td-num">${cm.cartera}</td>
+        <td class="td-num">${cm.compradores}</td>
+        <td class="td-num">${cm.cobertura.toFixed(1)}%</td>
+        <td class="td-num">${fmt(cm.cajas)}</td>
+        <td class="td-num">${fmt(cm.cajasPorCCC)}</td>
+      </tr>`;
+
+      Object.keys(tree[vendedor][canal]).sort().forEach(tipo => {
+        const clientesTipo = tree[vendedor][canal][tipo];
+        const tm = metricsCartera(clientesTipo);
+        const tHidden = (!vOpen || !cOpen) ? 'mtx-hidden' : '';
+
+        html += `<tr class="mtx-level-2 ${tHidden}" data-parent="${cId}">
+          <td>${tipo}</td>
+          <td class="td-num">${tm.cartera}</td>
+          <td class="td-num">${tm.compradores}</td>
+          <td class="td-num">${tm.cobertura.toFixed(1)}%</td>
+          <td class="td-num">${fmt(tm.cajas)}</td>
+          <td class="td-num">${fmt(tm.cajasPorCCC)}</td>
+        </tr>`;
+      });
+    });
+  });
+
+  // Totalizador general
+  const totalGeneral = metricsCartera(carteraRaw);
+  html += `<tr class="mtx-total-row">
+    <td>TOTAL CARTERA</td>
+    <td class="td-num">${totalGeneral.cartera}</td>
+    <td class="td-num">${totalGeneral.compradores}</td>
+    <td class="td-num">${totalGeneral.cobertura.toFixed(1)}%</td>
+    <td class="td-num">${fmt(totalGeneral.cajas)}</td>
+    <td class="td-num">${fmt(totalGeneral.cajasPorCCC)}</td>
+  </tr>`;
+
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function toggleNodeCartera(nodeId) {
+  if (expandedNodesCartera.has(nodeId)) expandedNodesCartera.delete(nodeId);
+  else expandedNodesCartera.add(nodeId);
+  renderMatrizCartera();
+}
+
+function toggleExpandAllCartera() {
+  if (allExpandedCartera) {
+    expandedNodesCartera.clear();
+  } else {
+    carteraRaw.forEach(c => {
+      const vId = 'v_' + c.vendedor.replace(/[^a-zA-Z0-9]/g,'_');
+      const cId = vId + '_c_' + c.canal.replace(/[^a-zA-Z0-9]/g,'_');
+      expandedNodesCartera.add(vId);
+      expandedNodesCartera.add(cId);
+    });
+  }
+  allExpandedCartera = !allExpandedCartera;
+  renderMatrizCartera();
 }
 
 // ── CLIENTES ──────────────────────────────────────────────
