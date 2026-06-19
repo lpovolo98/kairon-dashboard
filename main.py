@@ -137,12 +137,35 @@ def normalizar_qty(qty, uom_id_tuple, uom_factors):
     factor = uom_factors.get(uom_id, 1)
     return qty * factor
 
+def get_proveedores_por_producto(models, uid):
+    """Trae el proveedor real de cada producto desde product.supplierinfo
+    (la pestaña 'Compras' de la ficha del producto en Odoo) — fuente de
+    verdad en vez de mantener un mapeo manual en el frontend.
+    Si un producto tiene más de un proveedor cargado (por ej. quedó un
+    registro viejo sin borrar), nos quedamos con el de id más alto, que
+    es el cargado más recientemente."""
+    registros = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "product.supplierinfo", "search_read",
+        [[]],
+        {"fields": ["id", "partner_id", "product_tmpl_id"]}
+    )
+    # Si hay varios registros para el mismo template, nos quedamos con el último (id más alto)
+    por_tmpl = {}
+    for r in registros:
+        if not r.get("product_tmpl_id") or not r.get("partner_id"):
+            continue
+        tmpl_id = r["product_tmpl_id"][0]
+        if tmpl_id not in por_tmpl or r["id"] > por_tmpl[tmpl_id]["id"]:
+            por_tmpl[tmpl_id] = {"id": r["id"], "proveedor": r["partner_id"][1]}
+    return {tmpl_id: v["proveedor"] for tmpl_id, v in por_tmpl.items()}
+
 # ─── Data builders ──────────────────────────────────────────
 
 def build_stock_data(uid, models):
     """Stock actual en CAJAS + promedio de ventas (facturado) en CAJAS + días de inventario.
     Todo el módulo trabaja en cajas: stock físico ÷ unid_caja, venta facturada normalizada ÷ unid_caja."""
     uom_factors = get_uom_factors(models, uid)
+    proveedores_map = get_proveedores_por_producto(models, uid)
 
     # Stock actual por producto (Odoo lo guarda en unidades base del producto)
     quants = odoo_call(models, uid, "stock.quant", "search_read",
@@ -177,7 +200,8 @@ def build_stock_data(uid, models):
     productos = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
         "product.product", "search_read",
         [[["id", "in", pids]]],
-        {"fields": ["id", "name", "categ_id", "default_code", "uom_id", "standard_price", "x_studio_unidades_por_caja"]}
+        {"fields": ["id", "name", "categ_id", "default_code", "uom_id", "standard_price",
+                    "x_studio_unidades_por_caja", "product_tmpl_id"]}
     )
 
     dias = 60
@@ -185,6 +209,8 @@ def build_stock_data(uid, models):
     for p in productos:
         pid = p["id"]
         unid_caja = p.get("x_studio_unidades_por_caja") or 1
+        tmpl_id = p["product_tmpl_id"][0] if p.get("product_tmpl_id") else None
+        proveedor = proveedores_map.get(tmpl_id, "Sin proveedor")
 
         # Stock y venta, convertidos de unidades a CAJAS
         stock_unidades = stock_map.get(pid, 0)
@@ -209,6 +235,7 @@ def build_stock_data(uid, models):
             "codigo": p.get("default_code") or "",
             "nombre": p["name"],
             "categoria": p["categ_id"][1] if p["categ_id"] else "Sin categoría",
+            "proveedor": proveedor,
             "uom": "Cajas",
             "unid_caja": unid_caja,
             "stock_actual": stock_cajas,
@@ -231,6 +258,7 @@ def build_ventas_data(uid, models):
     fecha_desde = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
 
     uom_factors = get_uom_factors(models, uid)
+    proveedores_map = get_proveedores_por_producto(models, uid)
 
     ordenes = odoo_call(models, uid, "sale.order", "search_read",
         [["state", "in", ["sale", "done"]], ["date_order", ">=", fecha_desde]],
@@ -246,21 +274,23 @@ def build_ventas_data(uid, models):
             ["order_id", "product_id", "qty_invoiced", "product_uom_id", "price_subtotal", "price_total"]
         )
 
-    # Info de productos: categoría, costo, unidades por caja (para mostrar en "cajas")
+    # Info de productos: categoría, costo, unidades por caja, proveedor real (Compras)
     prod_ids = list({l["product_id"][0] for l in lineas if l["product_id"]})
     prod_info = {}
     if prod_ids:
         prods = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
             "product.product", "search_read",
             [[["id", "in", prod_ids]]],
-            {"fields": ["id", "name", "categ_id", "default_code", "x_studio_unidades_por_caja"]}
+            {"fields": ["id", "name", "categ_id", "default_code", "x_studio_unidades_por_caja", "product_tmpl_id"]}
         )
         for p in prods:
+            tmpl_id = p["product_tmpl_id"][0] if p.get("product_tmpl_id") else None
             prod_info[p["id"]] = {
                 "nombre":   p["name"],
                 "categoria": p["categ_id"][1] if p["categ_id"] else "Sin categoría",
                 "codigo":   p.get("default_code") or "",
                 "unid_caja": p.get("x_studio_unidades_por_caja") or 1,
+                "proveedor": proveedores_map.get(tmpl_id, "Sin proveedor"),
             }
 
     # Info de clientes: canal y tipo de comercio (res.partner)
@@ -314,6 +344,7 @@ def build_ventas_data(uid, models):
             "producto":       info["nombre"],
             "codigo":         info["codigo"],
             "categoria":      info["categoria"],
+            "proveedor":      info["proveedor"],
             "unidades":       round(unidades_facturadas, 2),
             "cajas":          round(cajas, 3),
             "monto_total":    round(l.get("price_total", l["price_subtotal"]), 2),

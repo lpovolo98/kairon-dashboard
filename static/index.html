@@ -563,6 +563,11 @@ canvas { max-height: 200px; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script>
 // ── Mapa proveedor + segmento ──────────────────────────────
+// NOTA: el campo "proveedor" de este mapa ya NO SE USA — el proveedor real
+// se lee directo de Odoo (product.supplierinfo, pestaña Compras de cada
+// producto) vía backend. Solo "segmento" sigue siendo manual acá, porque
+// no existe un campo equivalente en Odoo. Se deja "proveedor" en los
+// objetos por compatibilidad/referencia visual, sin efecto funcional.
 const PROD_MAP = {
   "Alfajor Emilio Maicena 72gr X 12u.":             { proveedor: "CIBOS SRL",                       segmento: "Alfajores" },
   "Cerveza Birrazz 4x6x710ML":                      { proveedor: "DASBURG SA",                      segmento: "Cervezas" },
@@ -641,13 +646,25 @@ function showTab(name) {
 
 // ── STOCK ─────────────────────────────────────────────────
 function enrichStock(data) {
-  return data
+  const result = data
     .filter(d => !CATEGS_EXCLUIDAS.some(c => d.categoria.toLowerCase() === c.toLowerCase()))
     .filter(d => !NOMBRES_EXCLUIDOS.some(n => d.nombre.toLowerCase() === n.toLowerCase()))
     .map(d => {
       const info = PROD_MAP[d.nombre] || {};
-      return { ...d, proveedor: info.proveedor || 'Sin proveedor', segmento: info.segmento || 'Sin segmento' };
+      // Proveedor: viene del backend (product.supplierinfo real de Odoo).
+      // Segmento: sigue siendo manual via PROD_MAP (no existe como campo en Odoo).
+      return { ...d, proveedor: d.proveedor || 'Sin proveedor', segmento: info.segmento || 'Sin segmento' };
     });
+
+  // Diagnóstico: lista en consola los nombres EXACTOS (con comillas) de
+  // productos sin proveedor, para copiar y pegar sin errores de tipeo.
+  const sinProv = result.filter(d => d.proveedor === 'Sin proveedor');
+  if (sinProv.length) {
+    console.log(`%c${sinProv.length} producto(s) SIN PROVEEDOR — cargar en Odoo (ficha producto > Compras):`, 'color:#f5c842;font-weight:bold');
+    sinProv.forEach(d => console.log(JSON.stringify(d.nombre)));
+  }
+
+  return result;
 }
 
 async function loadStock() {
@@ -903,7 +920,9 @@ let allExpandedCartera = false;
 
 function enrichVentaRow(row) {
   const info = PROD_MAP[row.producto] || {};
-  return { ...row, proveedor: info.proveedor || 'Sin proveedor', segmento: info.segmento || 'Sin segmento' };
+  // Proveedor: viene del backend (product.supplierinfo real de Odoo).
+  // Segmento: sigue siendo manual via PROD_MAP.
+  return { ...row, proveedor: row.proveedor || 'Sin proveedor', segmento: info.segmento || 'Sin segmento' };
 }
 
 async function loadVentas() {
