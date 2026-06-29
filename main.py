@@ -1124,7 +1124,15 @@ def status():
         "odoo_url": ODOO_URL,
         "cache_ttl": CACHE_TTL,
         "cached_keys": list(_cache.keys()),
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "twilio_configurado": {
+            "TWILIO_ACCOUNT_SID": bool(TWILIO_ACCOUNT_SID),
+            "TWILIO_AUTH_TOKEN": bool(TWILIO_AUTH_TOKEN),
+            "TWILIO_WHATSAPP_FROM": bool(TWILIO_WHATSAPP_FROM),
+            "REPORTE_WHATSAPP_TO": bool(REPORTE_WHATSAPP_TO),
+            "PUBLIC_BASE_URL": bool(os.getenv("PUBLIC_BASE_URL", "")),
+            "REPORTE_CRON_SECRET": bool(REPORTE_CRON_SECRET),
+        }
     }
 
 @app.get("/api/cobranzas")
