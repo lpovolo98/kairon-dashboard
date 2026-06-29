@@ -933,10 +933,15 @@ def _fmt_num(n):
     return f"{n:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def _cargar_fuente(size, bold=False):
-    """Intenta usar DejaVuSans (suele venir instalada en la imagen base de
-    Python/Debian); si no está disponible, cae al font default de Pillow
-    para que la generación nunca falle por falta de fuente."""
+    """Prioriza la fuente empaquetada junto al proyecto (static/DejaVuSans*.ttf)
+    para que el resultado sea idéntico sin importar la imagen base que use
+    Railway. Si por algún motivo no estuviera (ej. corriendo desde otra
+    carpeta), cae a la ruta típica del sistema, y como último recurso al
+    font default de Pillow para que la generación nunca falle del todo."""
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
     candidatos = [
+        os.path.join(static_dir, "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"),
+        os.path.join(static_dir, "DejaVuSans.ttf"),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
@@ -1095,10 +1100,11 @@ def enviar_reporte_whatsapp(vendedor="JK"):
 
     try:
         client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        dashboard_link = f"{base_url}/?tab=objetivos&vendedor={vendedor}"
         client.messages.create(
             from_=TWILIO_WHATSAPP_FROM,
             to=REPORTE_WHATSAPP_TO,
-            body=f"📊 Avance de objetivos — {vendedor} — {formatMes_py(mes)}",
+            body=f"📊 Avance de objetivos — {vendedor} — {formatMes_py(mes)}\nVer en el dashboard: {dashboard_link}",
             media_url=[img_url],
         )
     except Exception as e:

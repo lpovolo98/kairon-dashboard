@@ -684,6 +684,13 @@ let chartCajas = null, chartClientes = null, selectedCliente = null;
 // ── Init ──────────────────────────────────────────────────
 async function init() {
   await Promise.all([loadStock(), loadVentas(), loadClientes(), loadCobranzas()]);
+  // Soporte de deep-link: ?tab=objetivos&vendedor=JK abre directo esa pestaña
+  // y, si existe, prefiltra por vendedor (usado por el link del reporte de WhatsApp).
+  const params = new URLSearchParams(window.location.search);
+  const tabParam = params.get('tab');
+  if (tabParam) {
+    showTab(tabParam);
+  }
 }
 async function refreshAll() {
   document.getElementById('sync-info').textContent = 'Actualizando...';
