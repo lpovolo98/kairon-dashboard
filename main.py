@@ -11,6 +11,8 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
+from PIL import Image, ImageDraw, ImageFont
+from twilio.rest import Client as TwilioClient
 import threading
 
 load_dotenv()
@@ -24,6 +26,13 @@ ODOO_DB   = os.getenv("ODOO_DB", "")
 ODOO_USER = os.getenv("ODOO_USER", "")
 ODOO_PASS = os.getenv("ODOO_PASSWORD", "")
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "900"))  # 15 min default
+
+# ─── Twilio (reporte diario por WhatsApp) ────────────────────
+TWILIO_ACCOUNT_SID   = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN    = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "")   # ej: "whatsapp:+14155238886"
+REPORTE_WHATSAPP_TO  = os.getenv("REPORTE_WHATSAPP_TO", "")    # ej: "whatsapp:+5491132308807"
+REPORTE_CRON_SECRET  = os.getenv("REPORTE_CRON_SECRET", "")    # token simple para proteger el endpoint del cron
 
 # ─── Cache store ────────────────────────────────────────────
 _cache = {}
@@ -856,19 +865,17 @@ def post_objetivos(body: GuardarObjetivosBody):
     guardar_objetivos(data)
     return {"ok": True}
 
-@app.get("/api/objetivos/avance")
-def get_objetivos_avance(mes: str):
+def build_objetivos_avance(uid, models, mes):
     """Cruza los objetivos guardados de un mes con la venta real (Ventas +
-    Cartera) para armar la matriz Vendedor > Proveedor con % de cumplimiento."""
+    Cartera) para armar la matriz Vendedor > Proveedor con % de cumplimiento.
+    Reutilizada por el endpoint HTTP y por el reporte diario de WhatsApp."""
     objetivos_data = cargar_objetivos().get(mes, {})
 
-    uid, models = odoo_connect()
     ventas = build_ventas_data(uid, models)
     cartera = build_cartera_data(uid, models)
 
     ventas_mes = [v for v in ventas if v["mes"] == mes]
 
-    # Cartera por vendedor (para el denominador de cobertura)
     cartera_por_vendedor = defaultdict(list)
     for c in cartera:
         cartera_por_vendedor[c["vendedor"]].append(c)
@@ -906,7 +913,209 @@ def get_objetivos_avance(mes: str):
                 "cobertura_objetivo": obj.get("cobertura", 0),
             }
 
+    return resultado
+
+@app.get("/api/objetivos/avance")
+def get_objetivos_avance(mes: str):
+    resultado = build_objetivos_avance(*odoo_connect(), mes)
     return {"mes": mes, "data": resultado}
+
+# ─── Reporte diario por WhatsApp (imagen del avance de Objetivos) ────
+def _semaforo_color(pct):
+    if pct >= 95: return (62, 207, 178)   # verde (--green)
+    if pct >= 70: return (245, 200, 66)   # amarillo (--yellow)
+    return (255, 79, 79)                  # rojo (--red)
+
+def _fmt_money(n):
+    return f"${n:,.0f}".replace(",", ".")
+
+def _fmt_num(n):
+    return f"{n:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def _cargar_fuente(size, bold=False):
+    """Intenta usar DejaVuSans (suele venir instalada en la imagen base de
+    Python/Debian); si no está disponible, cae al font default de Pillow
+    para que la generación nunca falle por falta de fuente."""
+    candidatos = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for ruta in candidatos:
+        if os.path.exists(ruta):
+            try:
+                return ImageFont.truetype(ruta, size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+def generar_imagen_objetivos(vendedor, mes, avance_vendedor):
+    """Dibuja la tabla de avance de un vendedor (Proveedor: Ventas/Objetivo/
+    Cajas/Objetivo/Cobertura, con barra de semáforo) como imagen PNG,
+    visualmente alineada a la paleta del dashboard."""
+    BG = (11, 13, 17)
+    BG2 = (19, 22, 29)
+    BG3 = (26, 30, 40)
+    BORDER = (37, 42, 56)
+    TEXT = (232, 234, 240)
+    MUTED = (92, 98, 120)
+    ACCENT2 = (62, 207, 178)
+
+    proveedores = sorted(avance_vendedor.keys())
+    row_h = 64
+    header_h = 110
+    footer_h = 30
+    width = 1120
+    height = header_h + row_h * (len(proveedores) + 1) + footer_h  # +1 = fila de totales
+
+    img = Image.new("RGB", (width, height), BG)
+    draw = ImageDraw.Draw(img)
+
+    f_title = _cargar_fuente(26, bold=True)
+    f_sub = _cargar_fuente(15)
+    f_header = _cargar_fuente(12, bold=True)
+    f_cell = _cargar_fuente(14)
+    f_cell_b = _cargar_fuente(14, bold=True)
+    f_pct = _cargar_fuente(13, bold=True)
+
+    # Header
+    draw.text((28, 22), f"Avance Objetivos — {vendedor}", font=f_title, fill=TEXT)
+    draw.text((28, 58), formatMes_py(mes), font=f_sub, fill=MUTED)
+
+    col_x = [28, 310, 460, 610, 760, 900]
+    headers = ["Proveedor", "Ventas $ / Obj.", "% Vtas", "Cajas / Obj.", "% Cajas", "% Cobertura"]
+    y_head = header_h - 26
+    for x, h in zip(col_x, headers):
+        draw.text((x, y_head), h.upper(), font=f_header, fill=MUTED)
+    draw.line([(28, header_h-4), (width-28, header_h-4)], fill=BORDER, width=1)
+
+    # Totales
+    vFactReal = sum(m["facturacion_real"] for m in avance_vendedor.values())
+    vFactObj  = sum(m["facturacion_objetivo"] for m in avance_vendedor.values())
+    vCajasReal = sum(m["cajas_real"] for m in avance_vendedor.values())
+    vCajasObj  = sum(m["cajas_objetivo"] for m in avance_vendedor.values())
+    vCartera = next(iter(avance_vendedor.values()))["clientes_cartera"] if avance_vendedor else 0
+    vConCompra = max((m["clientes_con_compra"] for m in avance_vendedor.values()), default=0)
+    coberturaRealV = round(vConCompra / vCartera * 100, 1) if vCartera > 0 else 0
+    objsCob = [m["cobertura_objetivo"] for m in avance_vendedor.values() if m["cobertura_objetivo"] > 0]
+    coberturaObjV = sum(objsCob)/len(objsCob) if objsCob else 0
+
+    def dibujar_fila(y, nombre, fact_real, fact_obj, cajas_real, cajas_obj, cob_real, cob_obj, es_total=False):
+        bg = BG3 if es_total else (BG2 if (y // row_h) % 2 == 0 else BG)
+        draw.rectangle([24, y, width-24, y+row_h-4], fill=bg)
+        fcell = f_cell_b if es_total else f_cell
+        nombre_corto = nombre if len(nombre) <= 26 else nombre[:24] + "…"
+        draw.text((col_x[0]+4, y+row_h//2-10), nombre_corto, font=fcell, fill=TEXT)
+
+        draw.text((col_x[1]+4, y+8), _fmt_money(fact_real), font=fcell, fill=TEXT)
+        draw.text((col_x[1]+4, y+30), f"obj: {_fmt_money(fact_obj) if fact_obj>0 else '—'}", font=f_cell, fill=MUTED)
+
+        pct_fact = (fact_real/fact_obj*100) if fact_obj > 0 else None
+        if pct_fact is not None:
+            color = _semaforo_color(pct_fact)
+            draw.text((col_x[2]+4, y+18), f"{round(pct_fact)}%", font=f_pct, fill=color)
+        else:
+            draw.text((col_x[2]+4, y+18), "—", font=f_cell, fill=MUTED)
+
+        draw.text((col_x[3]+4, y+8), _fmt_num(cajas_real), font=fcell, fill=TEXT)
+        draw.text((col_x[3]+4, y+30), f"obj: {_fmt_num(cajas_obj) if cajas_obj>0 else '—'}", font=f_cell, fill=MUTED)
+
+        pct_cajas = (cajas_real/cajas_obj*100) if cajas_obj > 0 else None
+        if pct_cajas is not None:
+            color = _semaforo_color(pct_cajas)
+            draw.text((col_x[4]+4, y+18), f"{round(pct_cajas)}%", font=f_pct, fill=color)
+        else:
+            draw.text((col_x[4]+4, y+18), "—", font=f_cell, fill=MUTED)
+
+        cob_txt = f"{cob_real:.1f}% / obj {cob_obj:.1f}%" if cob_obj > 0 else f"{cob_real:.1f}%"
+        draw.text((col_x[5]+4, y+8), cob_txt, font=f_cell, fill=TEXT)
+        pct_cob = (cob_real/cob_obj*100) if cob_obj > 0 else None
+        if pct_cob is not None:
+            color = _semaforo_color(pct_cob)
+            draw.text((col_x[5]+4, y+30), f"{round(pct_cob)}% cumpl.", font=f_pct, fill=color)
+
+    y = header_h
+    dibujar_fila(y, "TOTAL", vFactReal, vFactObj, vCajasReal, vCajasObj, coberturaRealV, coberturaObjV, es_total=True)
+    y += row_h
+    for p in proveedores:
+        m = avance_vendedor[p]
+        dibujar_fila(y, p, m["facturacion_real"], m["facturacion_objetivo"],
+                     m["cajas_real"], m["cajas_objetivo"], m["cobertura_real"], m["cobertura_objetivo"])
+        y += row_h
+
+    draw.text((28, height-24), "Kairon Distribuciones · Reporte automático diario", font=f_cell, fill=MUTED)
+
+    return img
+
+def formatMes_py(ym):
+    meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
+    y, m = ym.split("-")
+    return f"{meses[int(m)-1]} {y}"
+
+def enviar_reporte_whatsapp(vendedor="JK"):
+    """Genera la imagen del avance del mes en curso para `vendedor` y la
+    manda por WhatsApp via Twilio. Devuelve (ok: bool, detalle: str)."""
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, REPORTE_WHATSAPP_TO]):
+        return False, "Faltan variables de entorno de Twilio (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM / REPORTE_WHATSAPP_TO)"
+
+    mes = date.today().strftime("%Y-%m")
+    try:
+        uid, models = odoo_connect()
+        avance = build_objetivos_avance(uid, models, mes)
+    except Exception as e:
+        return False, f"Error consultando Odoo: {e}"
+
+    avance_vendedor = avance.get(vendedor)
+    if not avance_vendedor:
+        return False, f"No hay datos de avance para el vendedor '{vendedor}' en {mes}"
+
+    try:
+        img = generar_imagen_objetivos(vendedor, mes, avance_vendedor)
+    except Exception as e:
+        return False, f"Error generando la imagen: {e}"
+
+    # Guardamos el PNG en static/ para que Twilio pueda descargarlo por URL pública.
+    # Limpiamos reportes viejos primero (son efímeros, solo necesitan vivir
+    # el tiempo que tarda Twilio en buscarlos) para no acumular archivos.
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    try:
+        for f in os.listdir(static_dir):
+            if f.startswith("reporte_") and f.endswith(".png"):
+                os.remove(os.path.join(static_dir, f))
+    except Exception:
+        pass
+
+    img_filename = f"reporte_{vendedor}_{mes}_{int(time.time())}.png"
+    img_path = os.path.join(static_dir, img_filename)
+    img.save(img_path, "PNG")
+
+    base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    if not base_url:
+        return False, "Falta la variable de entorno PUBLIC_BASE_URL (la URL pública del dashboard, ej. https://web-production-xxxx.up.railway.app)"
+    img_url = f"{base_url}/static/{img_filename}"
+
+    try:
+        client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client.messages.create(
+            from_=TWILIO_WHATSAPP_FROM,
+            to=REPORTE_WHATSAPP_TO,
+            body=f"📊 Avance de objetivos — {vendedor} — {formatMes_py(mes)}",
+            media_url=[img_url],
+        )
+    except Exception as e:
+        return False, f"Error enviando por Twilio: {e}"
+
+    return True, f"Reporte de {vendedor} enviado correctamente ({img_filename})"
+
+@app.get("/api/reporte-diario")
+def trigger_reporte_diario(secret: str = "", vendedor: str = "JK"):
+    """Endpoint que dispara el cron externo (ej. cron-job.org) todos los
+    días a las 8 AM. Protegido con un secret simple en query param."""
+    if REPORTE_CRON_SECRET and secret != REPORTE_CRON_SECRET:
+        raise HTTPException(status_code=403, detail="Secret inválido")
+    ok, detalle = enviar_reporte_whatsapp(vendedor)
+    if not ok:
+        raise HTTPException(status_code=500, detail=detalle)
+    return {"ok": True, "detalle": detalle}
 
 @app.get("/api/status")
 def status():
