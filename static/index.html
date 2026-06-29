@@ -60,7 +60,7 @@ nav::-webkit-scrollbar { display: none; }
 .tab:hover:not(.active) { color: var(--text); background: var(--bg3); }
 .tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
 .dot-stock { background: var(--accent2); } .dot-ventas { background: var(--accent); }
-.dot-clientes { background: var(--accent3); } .dot-cobr { background: var(--red); }
+.dot-clientes { background: var(--accent3); } .dot-cobr { background: var(--red); } .dot-objetivos { background: #ff8c42; }
 
 /* ── Layout ── */
 main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
@@ -110,6 +110,7 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
   border-radius: 20px 20px 0 0;
   padding: 28px 24px 36px; width: 100%; max-width: 480px;
 }
+.modal.modal-wide { max-width: 920px; }
 .modal h3 { font-size: 17px; font-weight: 800; margin-bottom: 6px; }
 .modal p { font-size: 12px; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
 .modal-field { margin-bottom: 18px; }
@@ -211,6 +212,24 @@ canvas { max-height: 200px; }
   background: var(--bg3); border-top: 2px solid var(--accent2);
   font-weight: 800; font-size: 13px; padding: 12px 14px;
 }
+
+/* ── Objetivos: barra de progreso + semáforo ── */
+.obj-progress-wrap { display: flex; align-items: center; gap: 8px; min-width: 140px; }
+.obj-progress-bar { flex: 1; background: var(--bg3); border-radius: 4px; height: 8px; overflow: hidden; }
+.obj-progress-fill { height: 100%; border-radius: 4px; transition: width .3s; }
+.obj-progress-fill.semaforo-red    { background: var(--red); }
+.obj-progress-fill.semaforo-yellow { background: var(--yellow); }
+.obj-progress-fill.semaforo-green  { background: var(--green); }
+.obj-pct-label { font-size: 11px; font-weight: 700; min-width: 38px; text-align: right; }
+.obj-pct-label.semaforo-red    { color: var(--red); }
+.obj-pct-label.semaforo-yellow { color: var(--yellow); }
+.obj-pct-label.semaforo-green  { color: var(--green); }
+.obj-input-row { display: grid; grid-template-columns: 1fr 110px 110px 90px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.obj-input-row input {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  font-family: var(--font); font-size: 13px; padding: 7px 10px; border-radius: 6px; outline: none; width: 100%;
+}
+.obj-input-row input:focus { border-color: var(--accent2); }
 
 /* ── Multiselect dropdown ── */
 .multiselect-wrap { position: relative; }
@@ -357,6 +376,7 @@ canvas { max-height: 200px; }
   .tab.active { background: var(--bg); border-color: var(--border); border-bottom-color: transparent; }
   main { padding: 28px 32px; }
   .modal { border-radius: 16px; width: 420px; }
+  .modal.modal-wide { width: 90vw; max-width: 920px; }
   .modal-overlay { align-items: center; }
   .btn-cancel { flex: none; }
   .btn-generar { flex: none; }
@@ -402,6 +422,7 @@ canvas { max-height: 200px; }
   <div class="tab" onclick="showTab('ventas')"><span class="tab-dot dot-ventas"></span>Ventas</div>
   <div class="tab" onclick="showTab('clientes')"><span class="tab-dot dot-clientes"></span>Clientes</div>
   <div class="tab" onclick="showTab('cobranzas')"><span class="tab-dot dot-cobr"></span>Cobranzas</div>
+  <div class="tab" onclick="showTab('objetivos')"><span class="tab-dot dot-objetivos"></span>Objetivos</div>
 </nav>
 
 <main>
@@ -486,32 +507,44 @@ canvas { max-height: 200px; }
   <div class="table-wrap" id="ventas-matriz-cartera-wrap">
     <div class="loading"><div class="spinner"></div>Cargando cartera...</div>
   </div>
+
+  <div class="filters" style="margin-top:24px">
+    <span class="filter-label" style="font-size:13px;font-weight:700;color:var(--text)">Matriz Vendedor · Proveedor <span style="font-weight:400;color:var(--muted);font-size:11px">(toda la venta facturada, no solo cartera)</span></span>
+    <button class="btn-refresh" style="margin-left:auto" onclick="toggleExpandAllVendProv()">↕ Expandir/Contraer todo</button>
+  </div>
+  <div class="table-wrap" id="ventas-matriz-vendprov-wrap">
+    <div class="loading"><div class="spinner"></div>Cargando...</div>
+  </div>
 </div>
 
 <!-- ══ CLIENTES ══ -->
 <div class="panel" id="panel-clientes">
   <div class="stats-row" id="clientes-stats"></div>
-  <div class="cliente-grid">
-    <div>
-      <div class="filters">
-        <input class="filter-input" id="cli-search" placeholder="Buscar cliente..." oninput="renderClientes()">
-        <select class="filter-select" id="cli-estado" onchange="renderClientes()">
-          <option value="">Todos</option>
-          <option value="activo">Compró este mes</option>
-          <option value="inactivo">No compró este mes</option>
-          <option value="oportunidad">Con oportunidad</option>
-        </select>
-      </div>
-      <div class="table-wrap" id="cli-table-wrap">
-        <div class="loading"><div class="spinner"></div>Cargando clientes...</div>
-      </div>
-    </div>
-    <div id="cli-detail" style="display:none">
-      <div class="detail-card" id="cli-detail-card"></div>
-    </div>
+  <div class="filters">
+    <input class="filter-input" id="cli-search" placeholder="Buscar cliente..." oninput="renderClientes()">
+    <select class="filter-select" id="cli-vendedor" onchange="renderClientes()">
+      <option value="">Todos los vendedores</option>
+    </select>
+    <select class="filter-select" id="cli-estado" onchange="renderClientes()">
+      <option value="">Todos</option>
+      <option value="activo">Compró este mes</option>
+      <option value="inactivo">No compró este mes</option>
+      <option value="oportunidad">Con oportunidad</option>
+    </select>
+  </div>
+  <div class="table-wrap" id="cli-table-wrap">
+    <div class="loading"><div class="spinner"></div>Cargando clientes...</div>
   </div>
 </div>
 
+<!-- ══ MODAL DETALLE DE CLIENTE ══ -->
+<div class="modal-overlay" id="cliente-detalle-overlay" onclick="if(event.target===this)closeClienteDetalle()">
+  <div class="modal modal-wide" id="cliente-detalle-modal" style="max-height:90vh;overflow-y:auto">
+    <div id="cliente-detalle-content">
+      <div class="loading"><div class="spinner"></div>Cargando detalle...</div>
+    </div>
+  </div>
+</div>
 
 <!-- ══ COBRANZAS ══ -->
 <div class="panel" id="panel-cobranzas">
@@ -554,6 +587,30 @@ canvas { max-height: 200px; }
     </div>
     <div id="cobr-detail" style="display:none">
       <div class="detail-card" id="cobr-detail-card" style="border-color:var(--red);max-height:80vh;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ OBJETIVOS ══ -->
+<div class="panel" id="panel-objetivos">
+  <div class="filters" style="margin-bottom:18px">
+    <span class="filter-label">Mes:</span>
+    <select class="filter-select" id="obj-mes" onchange="onCambioMesObjetivos()"></select>
+    <button class="btn-pedido" style="margin-left:auto" onclick="abrirEditorObjetivos()">✎ Cargar / Editar objetivos</button>
+  </div>
+
+  <div class="stats-row" id="obj-stats"></div>
+
+  <div class="table-wrap" id="obj-matriz-wrap">
+    <div class="loading"><div class="spinner"></div>Cargando objetivos...</div>
+  </div>
+</div>
+
+<!-- ══ MODAL EDITOR DE OBJETIVOS ══ -->
+<div class="modal-overlay" id="objetivos-editor-overlay" onclick="if(event.target===this)cerrarEditorObjetivos()">
+  <div class="modal modal-wide" id="objetivos-editor-modal" style="max-height:90vh;overflow-y:auto">
+    <div id="objetivos-editor-content">
+      <div class="loading"><div class="spinner"></div>Cargando...</div>
     </div>
   </div>
 </div>
@@ -639,9 +696,10 @@ async function refreshAll() {
 }
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) =>
-    t.classList.toggle('active', ['stock','ventas','clientes','cobranzas'][i] === name));
+    t.classList.toggle('active', ['stock','ventas','clientes','cobranzas','objetivos'][i] === name));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
+  if (name === 'objetivos' && typeof loadObjetivos === 'function') loadObjetivos();
 }
 
 // ── STOCK ─────────────────────────────────────────────────
@@ -675,6 +733,11 @@ async function loadStock() {
     document.getElementById('sync-info').textContent = `Sync: ${j.cached ? 'caché' : 'live'} · ${new Date().toLocaleTimeString('es-AR')}`;
     populateStockFiltros();
     renderStock();
+    // Si Ventas ya cargó antes que Stock, recalculamos el portfolio de la
+    // matriz Vendedor x Proveedor ahora que stockData está disponible.
+    if (typeof ventasRaw !== 'undefined' && ventasRaw.length) {
+      renderMatrizVendProv();
+    }
   } catch(e) {
     document.getElementById('stock-table-wrap').innerHTML = `<div class="empty">Error al conectar con el backend.</div>`;
   }
@@ -917,6 +980,8 @@ let chartFacturacion = null;
 let carteraRaw = [];          // clientes en cartera (vendedor, canal, tipo) — fijo, no depende del filtro de fecha
 let expandedNodesCartera = new Set();
 let allExpandedCartera = false;
+let expandedNodesVendProv = new Set();
+let allExpandedVendProv = false;
 
 function enrichVentaRow(row) {
   const info = PROD_MAP[row.producto] || {};
@@ -1050,6 +1115,7 @@ function applyVentasFiltro() {
   renderTendencia();
   renderVentasMatriz();
   renderMatrizCartera();
+  renderMatrizVendProv();
 }
 
 function getBaseFiltrada() {
@@ -1487,10 +1553,12 @@ function renderMatrizCartera() {
 
   // Set de partner_ids que compraron, dentro del recorte actual (mes + proveedor)
   const clientesQueCompraron = new Set(dataVentasFiltrada.map(d => d.partner_id));
-  // Cajas vendidas por partner_id, dentro del recorte actual
+  // Cajas y facturación por partner_id, dentro del recorte actual
   const cajasPorCliente = {};
+  const montoPorCliente = {};
   dataVentasFiltrada.forEach(d => {
     cajasPorCliente[d.partner_id] = (cajasPorCliente[d.partner_id] || 0) + d.cajas;
+    montoPorCliente[d.partner_id] = (montoPorCliente[d.partner_id] || 0) + d.monto_total;
   });
 
   // Construir árbol: vendedor -> canal -> tipo_comercio -> [clientes de cartera]
@@ -1507,8 +1575,9 @@ function renderMatrizCartera() {
     const compradores = clientesNodo.filter(c => clientesQueCompraron.has(c.id)).length;
     const cobertura = cartera > 0 ? (compradores / cartera * 100) : 0;
     const cajas = clientesNodo.reduce((s,c) => s + (cajasPorCliente[c.id] || 0), 0);
+    const facturacion = clientesNodo.reduce((s,c) => s + (montoPorCliente[c.id] || 0), 0);
     const cajasPorCCC = compradores > 0 ? cajas / compradores : 0;
-    return { cartera, compradores, cobertura, cajas, cajasPorCCC };
+    return { cartera, compradores, cobertura, cajas, facturacion, cajasPorCCC };
   }
 
   let html = `<table><thead><tr>
@@ -1517,6 +1586,7 @@ function renderMatrizCartera() {
     <th class="td-num">Clientes con compra</th>
     <th class="td-num">Cobertura %</th>
     <th class="td-num">Cajas vendidas</th>
+    <th class="td-num">Facturación $</th>
     <th class="td-num">Cajas / CCC</th>
   </tr></thead><tbody>`;
 
@@ -1532,6 +1602,7 @@ function renderMatrizCartera() {
       <td class="td-num">${vm.compradores}</td>
       <td class="td-num">${vm.cobertura.toFixed(1)}%</td>
       <td class="td-num">${fmt(vm.cajas)}</td>
+      <td class="td-num">$${fmtMoney(vm.facturacion)}</td>
       <td class="td-num">${fmt(vm.cajasPorCCC)}</td>
     </tr>`;
 
@@ -1548,6 +1619,7 @@ function renderMatrizCartera() {
         <td class="td-num">${cm.compradores}</td>
         <td class="td-num">${cm.cobertura.toFixed(1)}%</td>
         <td class="td-num">${fmt(cm.cajas)}</td>
+        <td class="td-num">$${fmtMoney(cm.facturacion)}</td>
         <td class="td-num">${fmt(cm.cajasPorCCC)}</td>
       </tr>`;
 
@@ -1562,6 +1634,7 @@ function renderMatrizCartera() {
           <td class="td-num">${tm.compradores}</td>
           <td class="td-num">${tm.cobertura.toFixed(1)}%</td>
           <td class="td-num">${fmt(tm.cajas)}</td>
+          <td class="td-num">$${fmtMoney(tm.facturacion)}</td>
           <td class="td-num">${fmt(tm.cajasPorCCC)}</td>
         </tr>`;
       });
@@ -1576,6 +1649,7 @@ function renderMatrizCartera() {
     <td class="td-num">${totalGeneral.compradores}</td>
     <td class="td-num">${totalGeneral.cobertura.toFixed(1)}%</td>
     <td class="td-num">${fmt(totalGeneral.cajas)}</td>
+    <td class="td-num">$${fmtMoney(totalGeneral.facturacion)}</td>
     <td class="td-num">${fmt(totalGeneral.cajasPorCCC)}</td>
   </tr>`;
 
@@ -1604,18 +1678,154 @@ function toggleExpandAllCartera() {
   renderMatrizCartera();
 }
 
+// ── Matriz Vendedor > Proveedor ──────────────────────────
+// Respeta el filtro de Proveedor de arriba (si hay 1+ seleccionados, solo
+// se muestran esos). Respeta el filtro de Mes igual que el resto de Ventas.
+// "Artículos vendidos / Total portfolio" usa stockData (todos los productos
+// activos del proveedor, vengan de Stock) como denominador — si Stock todavía
+// no cargó (carga en paralelo con Ventas), el denominador queda en "—" hasta
+// el próximo render.
+function renderMatrizVendProv() {
+  const wrap = document.getElementById('ventas-matriz-vendprov-wrap');
+  if (!wrap) return;
+
+  const data = getBaseFiltrada().filter(d => {
+    const mesFiltro = document.getElementById('ventas-mes').value;
+    return !mesFiltro || d.mes === mesFiltro;
+  });
+
+  if (!data.length) {
+    wrap.innerHTML = '<div class="empty">Sin datos para mostrar</div>';
+    return;
+  }
+
+  // Portfolio total por proveedor: productos distintos activos en Stock
+  const portfolioPorProveedor = {};
+  if (typeof stockData !== 'undefined' && stockData && stockData.length) {
+    stockData.forEach(d => {
+      if (!portfolioPorProveedor[d.proveedor]) portfolioPorProveedor[d.proveedor] = new Set();
+      portfolioPorProveedor[d.proveedor].add(d.nombre);
+    });
+  }
+
+  // Construir árbol: vendedor -> proveedor -> [filas de venta]
+  const tree = {};
+  data.forEach(d => {
+    if (!tree[d.vendedor]) tree[d.vendedor] = {};
+    if (!tree[d.vendedor][d.proveedor]) tree[d.vendedor][d.proveedor] = [];
+    tree[d.vendedor][d.proveedor].push(d);
+  });
+
+  function metricsVendProv(filas, proveedor) {
+    const clientesConCompra = new Set(filas.map(f => f.partner_id)).size;
+    const cajas = filas.reduce((s,f) => s + f.cajas, 0);
+    const facturacion = filas.reduce((s,f) => s + f.monto_total, 0);
+    const articulosVendidos = new Set(filas.map(f => f.producto)).size;
+    const totalPortfolio = proveedor && portfolioPorProveedor[proveedor] ? portfolioPorProveedor[proveedor].size : null;
+    return { clientesConCompra, cajas, facturacion, articulosVendidos, totalPortfolio };
+  }
+
+  function fmtArticulos(m) {
+    if (m.totalPortfolio === null) return `${m.articulosVendidos} / —`;
+    const pct = m.totalPortfolio > 0 ? Math.round(m.articulosVendidos / m.totalPortfolio * 100) : 0;
+    return `${m.articulosVendidos} / ${m.totalPortfolio} <span class="td-muted">(${pct}%)</span>`;
+  }
+
+  let html = `<table><thead><tr>
+    <th style="min-width:240px">Vendedor / Proveedor</th>
+    <th class="td-num">Clientes con compra</th>
+    <th class="td-num">Cajas vendidas</th>
+    <th class="td-num">Facturación $</th>
+    <th class="td-num">Artículos vendidos / Portfolio</th>
+  </tr></thead><tbody>`;
+
+  Object.keys(tree).sort().forEach(vendedor => {
+    const vId = 'vp_' + vendedor.replace(/[^a-zA-Z0-9]/g,'_');
+    const filasVendedor = Object.values(tree[vendedor]).flat();
+    const vm = metricsVendProv(filasVendedor, null); // total no aplica a nivel vendedor (mezcla proveedores)
+    const vOpen = expandedNodesVendProv.has(vId);
+
+    html += `<tr class="mtx-row mtx-level-0" onclick="toggleNodeVendProv('${vId}')">
+      <td><span class="mtx-toggle ${vOpen?'open':''}" id="tglvp_${vId}">▸</span>${vendedor}</td>
+      <td class="td-num">${vm.clientesConCompra}</td>
+      <td class="td-num">${fmt(vm.cajas)}</td>
+      <td class="td-num">$${fmtMoney(vm.facturacion)}</td>
+      <td class="td-num">${vm.articulosVendidos} artículos</td>
+    </tr>`;
+
+    Object.keys(tree[vendedor]).sort().forEach(proveedor => {
+      const filasProv = tree[vendedor][proveedor];
+      const pm = metricsVendProv(filasProv, proveedor);
+      const pHidden = !vOpen ? 'mtx-hidden' : '';
+
+      html += `<tr class="mtx-level-2 ${pHidden}" data-parent="${vId}">
+        <td>${proveedor}</td>
+        <td class="td-num">${pm.clientesConCompra}</td>
+        <td class="td-num">${fmt(pm.cajas)}</td>
+        <td class="td-num">$${fmtMoney(pm.facturacion)}</td>
+        <td class="td-num">${fmtArticulos(pm)}</td>
+      </tr>`;
+    });
+  });
+
+  // Totalizador general
+  const todasFilas = data;
+  const totalGeneral = metricsVendProv(todasFilas, null);
+  html += `<tr class="mtx-total-row">
+    <td>TOTAL</td>
+    <td class="td-num">${totalGeneral.clientesConCompra}</td>
+    <td class="td-num">${fmt(totalGeneral.cajas)}</td>
+    <td class="td-num">$${fmtMoney(totalGeneral.facturacion)}</td>
+    <td class="td-num">${totalGeneral.articulosVendidos} artículos</td>
+  </tr>`;
+
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function toggleNodeVendProv(nodeId) {
+  if (expandedNodesVendProv.has(nodeId)) expandedNodesVendProv.delete(nodeId);
+  else expandedNodesVendProv.add(nodeId);
+  renderMatrizVendProv();
+}
+
+function toggleExpandAllVendProv() {
+  if (allExpandedVendProv) {
+    expandedNodesVendProv.clear();
+  } else {
+    const data = getBaseFiltrada();
+    data.forEach(d => {
+      const vId = 'vp_' + d.vendedor.replace(/[^a-zA-Z0-9]/g,'_');
+      expandedNodesVendProv.add(vId);
+    });
+  }
+  allExpandedVendProv = !allExpandedVendProv;
+  renderMatrizVendProv();
+}
+
 // ── CLIENTES ──────────────────────────────────────────────
+let clienteDetalleCache = {}; // cache local por partner_id para no re-pedir si reabren el mismo cliente
+let chartClienteEvolucion = null;
+
 async function loadClientes() {
   try {
     const r = await fetch(`${API}/api/clientes`);
     const j = await r.json();
     clientesData = j.data || [];
+    populateClientesFiltros();
     renderClientesStats();
     renderClientes();
   } catch(e) {
     document.getElementById('cli-table-wrap').innerHTML='<div class="empty">Error al cargar clientes</div>';
   }
 }
+
+function populateClientesFiltros() {
+  const vendedores = [...new Set(clientesData.flatMap(d => d.vendedores || []))].sort();
+  document.getElementById('cli-vendedor').innerHTML =
+    '<option value="">Todos los vendedores</option>' + vendedores.map(v => `<option value="${v}">${v}</option>`).join('');
+}
+
 function renderClientesStats() {
   const total=clientesData.length, activos=clientesData.filter(d=>d.compro_este_mes).length;
   const conOport=clientesData.filter(d=>d.categorias_faltantes.length>0).length;
@@ -1625,40 +1835,188 @@ function renderClientesStats() {
     <div class="stat-card accent-purple"><div class="stat-label">Con oportunidad</div><div class="stat-value" style="color:var(--accent3)">${conOport}</div><div class="stat-sub">categorías sin comprar</div></div>
     <div class="stat-card"><div class="stat-label">Total clientes</div><div class="stat-value">${total}</div><div class="stat-sub">en base activa</div></div>`;
 }
+
 function renderClientes() {
   const search=document.getElementById('cli-search').value.toLowerCase();
   const estado=document.getElementById('cli-estado').value;
+  const vendedorSel=document.getElementById('cli-vendedor').value;
   let data=clientesData.filter(d=>{
     if(search&&!d.nombre.toLowerCase().includes(search))return false;
     if(estado==='activo'&&!d.compro_este_mes)return false;
     if(estado==='inactivo'&&d.compro_este_mes)return false;
     if(estado==='oportunidad'&&d.categorias_faltantes.length===0)return false;
+    if(vendedorSel && !(d.vendedores||[]).includes(vendedorSel))return false;
     return true;
   });
   if(!data.length){document.getElementById('cli-table-wrap').innerHTML='<div class="empty">Sin clientes</div>';return;}
   const rows=data.map(d=>{
     const badge=d.compro_este_mes?`<span class="badge badge-green"><span class="dot dot-g"></span>Activo</span>`:`<span class="badge badge-red"><span class="dot dot-r"></span>Inactivo</span>`;
-    const sel=selectedCliente&&selectedCliente.id===d.id;
-    return `<tr class="${sel?'row-selected':''}" onclick="selectCliente(${d.id})" style="cursor:pointer"><td class="td-name">${d.nombre}</td><td>${badge}</td><td class="td-num">${d.ordenes_90d} <span class="td-muted">pedidos</span></td><td class="td-num">$${fmtMoney(d.monto_90d)}</td><td class="td-num">${d.categorias_compradas.length}</td><td><span class="td-muted" style="font-size:11px">${d.oportunidad.slice(0,55)}${d.oportunidad.length>55?'…':''}</span></td></tr>`;
+    const ultimoPedido = d.ultimo_pedido_fecha ? formatFechaCorta(d.ultimo_pedido_fecha) : '<span class="td-muted">—</span>';
+    return `<tr onclick="abrirClienteDetalle(${d.id})" style="cursor:pointer"><td class="td-name">${d.nombre}</td><td>${badge}</td><td class="td-num">${d.ordenes_90d} <span class="td-muted">pedidos</span></td><td class="td-num">$${fmtMoney(d.monto_90d)}</td><td class="td-num">${d.categorias_compradas.length}</td><td class="td-num">${ultimoPedido}</td><td><span class="td-muted" style="font-size:11px">${d.oportunidad.slice(0,50)}${d.oportunidad.length>50?'…':''}</span></td></tr>`;
   }).join('');
-  document.getElementById('cli-table-wrap').innerHTML=`<table><thead><tr><th>Cliente</th><th>Estado</th><th class="td-num">Pedidos 90d</th><th class="td-num">Monto 90d</th><th class="td-num">Categorías</th><th>Oportunidad</th></tr></thead><tbody>${rows}</tbody></table>`;
+  document.getElementById('cli-table-wrap').innerHTML=`<table><thead><tr><th>Cliente</th><th>Estado</th><th class="td-num">Pedidos 90d</th><th class="td-num">Monto 90d</th><th class="td-num">Categorías</th><th class="td-num">Último pedido</th><th>Oportunidad</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
-function selectCliente(id) {
-  selectedCliente=clientesData.find(d=>d.id===id);
-  if(!selectedCliente)return;
-  renderClientes();
-  const d=selectedCliente;
-  document.getElementById('cli-detail-card').innerHTML=`
-    <h3>${d.nombre}</h3><div class="detail-city">${d.ciudad||'Sin ciudad'} · ${d.email||'Sin email'}</div>
-    <div class="detail-section"><div class="detail-section-label">Performance 90 días</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div style="background:var(--bg3);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:var(--muted)">Pedidos</div><div style="font-size:20px;font-weight:800">${d.ordenes_90d}</div></div>
-        <div style="background:var(--bg3);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:var(--muted)">Monto</div><div style="font-size:20px;font-weight:800">$${fmtMoney(d.monto_90d)}</div></div>
-      </div></div>
-    <div class="detail-section"><div class="detail-section-label">Categorías que compra</div>${d.categorias_compradas.map(c=>`<span class="categ-pill categ-ok">${c}</span>`).join('')||'<span style="color:var(--muted);font-size:12px">Sin compras</span>'}</div>
-    ${d.categorias_faltantes.length?`<div class="detail-section"><div class="detail-section-label">No compra (oportunidad)</div>${d.categorias_faltantes.map(c=>`<span class="categ-pill categ-miss">${c}</span>`).join('')}</div>`:''}
-    <div class="detail-section"><div class="detail-section-label">Resumen de oportunidad</div><div class="oport-box">${d.oportunidad}</div></div>`;
-  document.getElementById('cli-detail').style.display='block';
+
+function formatFechaCorta(iso) {
+  const [y,m,d] = iso.split('-');
+  return `${d}/${m}/${y.slice(2)}`;
+}
+
+// ── Modal de detalle de cliente ──────────────────────────
+async function abrirClienteDetalle(id) {
+  const cliente = clientesData.find(d => d.id === id);
+  if (!cliente) return;
+
+  document.getElementById('cliente-detalle-overlay').classList.add('open');
+  document.getElementById('cliente-detalle-content').innerHTML = '<div class="loading"><div class="spinner"></div>Cargando detalle...</div>';
+
+  let detalle;
+  try {
+    if (clienteDetalleCache[id]) {
+      detalle = clienteDetalleCache[id];
+    } else {
+      const r = await fetch(`${API}/api/cliente/${id}/detalle`);
+      const j = await r.json();
+      detalle = j.data || [];
+      clienteDetalleCache[id] = detalle;
+    }
+  } catch(e) {
+    document.getElementById('cliente-detalle-content').innerHTML = '<div class="empty">Error al cargar el detalle del cliente.</div>';
+    return;
+  }
+
+  renderClienteDetalleModal(cliente, detalle);
+}
+
+function closeClienteDetalle() {
+  document.getElementById('cliente-detalle-overlay').classList.remove('open');
+}
+
+function renderClienteDetalleModal(cliente, detalle, mesFiltro) {
+  const meses = [...new Set(detalle.map(d => d.mes))].sort();
+  mesFiltro = mesFiltro !== undefined ? mesFiltro : '';
+  const dataFiltrada = mesFiltro ? detalle.filter(d => d.mes === mesFiltro) : detalle;
+
+  const totalCajas = dataFiltrada.reduce((s,d) => s + d.cajas, 0);
+  const totalMonto = dataFiltrada.reduce((s,d) => s + d.monto_total, 0);
+  const proveedoresInvolucrados = new Set(dataFiltrada.map(d => d.proveedor)).size;
+  const articulosDistintos = new Set(dataFiltrada.map(d => d.producto)).size;
+
+  // Evolución mensual (siempre con TODO el histórico, sin importar el filtro de mes,
+  // para que el gráfico de tendencia no se vea recortado)
+  const porMes = {};
+  detalle.forEach(d => {
+    if (!porMes[d.mes]) porMes[d.mes] = { cajas: 0, monto: 0 };
+    porMes[d.mes].cajas += d.cajas;
+    porMes[d.mes].monto += d.monto_total;
+  });
+  const mesesOrdenados = Object.keys(porMes).sort();
+
+  // Matriz Proveedor > SKU dentro del recorte filtrado
+  const tree = {};
+  dataFiltrada.forEach(d => {
+    if (!tree[d.proveedor]) tree[d.proveedor] = {};
+    if (!tree[d.proveedor][d.producto]) tree[d.proveedor][d.producto] = { cajas: 0, monto: 0, codigo: d.codigo };
+    tree[d.proveedor][d.producto].cajas += d.cajas;
+    tree[d.proveedor][d.producto].monto += d.monto_total;
+  });
+
+  let tablaHtml = '';
+  if (!dataFiltrada.length) {
+    tablaHtml = '<div class="empty">Sin compras en el período seleccionado</div>';
+  } else {
+    tablaHtml = `<table><thead><tr>
+      <th>Proveedor / Artículo</th>
+      <th class="td-num">Cajas</th>
+      <th class="td-num">Facturación $</th>
+    </tr></thead><tbody>`;
+    Object.keys(tree).sort().forEach(prov => {
+      const skus = tree[prov];
+      const provCajas = Object.values(skus).reduce((s,v)=>s+v.cajas,0);
+      const provMonto = Object.values(skus).reduce((s,v)=>s+v.monto,0);
+      tablaHtml += `<tr class="mtx-level-0">
+        <td style="font-weight:800">${prov}</td>
+        <td class="td-num">${fmt(provCajas)}</td>
+        <td class="td-num">$${fmtMoney(provMonto)}</td>
+      </tr>`;
+      Object.keys(skus).sort().forEach(sku => {
+        const v = skus[sku];
+        tablaHtml += `<tr class="mtx-level-2">
+          <td><span class="td-muted" style="font-size:10px;margin-right:6px">${v.codigo}</span>${sku}</td>
+          <td class="td-num">${fmt(v.cajas)}</td>
+          <td class="td-num">$${fmtMoney(v.monto)}</td>
+        </tr>`;
+      });
+    });
+    tablaHtml += '</tbody></table>';
+  }
+
+  document.getElementById('cliente-detalle-content').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+      <div>
+        <h3 style="font-size:20px">${cliente.nombre}</h3>
+        <div class="detail-city">${cliente.ciudad||'Sin ciudad'} · ${cliente.email||'Sin email'} · Vendedor(es): ${(cliente.vendedores||[]).join(', ')||'Sin vendedor'}</div>
+      </div>
+      <button class="btn-cancel" style="padding:6px 14px;font-size:12px" onclick="closeClienteDetalle()">✕ Cerrar</button>
+    </div>
+
+    <div class="filters" style="margin:16px 0">
+      <span class="filter-label">Mes:</span>
+      <select class="filter-select" id="cliente-detalle-mes" onchange="onCambioMesClienteDetalle(${cliente.id})">
+        <option value="">Todos (12 meses)</option>
+        ${meses.map(m => `<option value="${m}" ${m===mesFiltro?'selected':''}>${formatMes(m)}</option>`).join('')}
+      </select>
+    </div>
+
+    <div class="stats-row" style="margin-bottom:18px">
+      <div class="stat-card accent-teal"><div class="stat-label">Cajas vendidas</div><div class="stat-value" style="color:var(--accent2)">${fmt(totalCajas)}</div><div class="stat-sub">${mesFiltro?formatMes(mesFiltro):'últimos 12 meses'}</div></div>
+      <div class="stat-card accent-green"><div class="stat-label">Facturación $</div><div class="stat-value" style="color:#3ecfb2;font-size:20px">$${fmtMoney(totalMonto)}</div><div class="stat-sub">${mesFiltro?formatMes(mesFiltro):'últimos 12 meses'}</div></div>
+      <div class="stat-card"><div class="stat-label">Proveedores</div><div class="stat-value">${proveedoresInvolucrados}</div><div class="stat-sub">distintos en el período</div></div>
+      <div class="stat-card accent-purple"><div class="stat-label">Artículos distintos</div><div class="stat-value" style="color:var(--accent3)">${articulosDistintos}</div><div class="stat-sub">SKUs comprados</div></div>
+    </div>
+
+    <div class="chart-card" style="margin-bottom:18px">
+      <div class="chart-title">Evolución de compra <span>cajas y facturación por mes</span></div>
+      <canvas id="chart-cliente-evolucion" style="max-height:200px"></canvas>
+    </div>
+
+    <div class="detail-section-label" style="margin-bottom:8px">Detalle por proveedor y artículo</div>
+    <div class="table-wrap">${tablaHtml}</div>
+  `;
+
+  // Gráfico de evolución (dual axis: cajas barra, facturación línea)
+  if (chartClienteEvolucion) chartClienteEvolucion.destroy();
+  const labels = mesesOrdenados.map(formatMes);
+  const cajasArr = mesesOrdenados.map(m => Math.round(porMes[m].cajas));
+  const montoArr = mesesOrdenados.map(m => Math.round(porMes[m].monto));
+  chartClienteEvolucion = new Chart(document.getElementById('chart-cliente-evolucion'), {
+    data: {
+      labels,
+      datasets: [
+        { type:'bar', label:'Cajas', data:cajasArr, backgroundColor:'rgba(62,207,178,.3)', borderColor:'#3ecfb2', borderWidth:1.5, borderRadius:4, yAxisID:'y' },
+        { type:'line', label:'Facturación $', data:montoArr, borderColor:'#f5c842', borderWidth:2, pointBackgroundColor:'#f5c842', tension:.3, yAxisID:'y1' },
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:true,
+      plugins:{
+        legend:{display:true, labels:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        tooltip:{callbacks:{label:ctx => ctx.dataset.label==='Cajas' ? `Cajas: ${ctx.raw}` : `Facturación: $${fmtMoney(ctx.raw)}`}}
+      },
+      scales:{
+        x:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        y:{position:'left', grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        y1:{position:'right', grid:{display:false},ticks:{color:'#5c6278',font:{family:'Poppins',size:9},callback:v=>'$'+fmtMoney(v)}}
+      }
+    }
+  });
+}
+
+function onCambioMesClienteDetalle(clienteId) {
+  const cliente = clientesData.find(d => d.id === clienteId);
+  const detalle = clienteDetalleCache[clienteId];
+  const mesFiltro = document.getElementById('cliente-detalle-mes').value;
+  renderClienteDetalleModal(cliente, detalle, mesFiltro);
 }
 
 // ── Helpers ──────────────────────────────────────────────
@@ -2110,6 +2468,294 @@ function exportCobrExcel() {
   XLSX.utils.book_append_sheet(wb, ws, 'Cuentas a Cobrar');
   const fechaF = new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, `cuentas_cobrar_kairon_${fechaF}.xlsx`);
+}
+
+// ── OBJETIVOS ─────────────────────────────────────────────
+let objetivosAvanceData = null; // respuesta de /api/objetivos/avance para el mes actual
+let objetivosGuardados = {};    // respuesta de /api/objetivos (todos los meses, para precargar el editor)
+
+function mesActualISO() {
+  return new Date().toISOString().slice(0,7);
+}
+
+function poblarSelectorMesObjetivos() {
+  const sel = document.getElementById('obj-mes');
+  if (sel.options.length > 0) return; // ya poblado
+  const hoy = new Date();
+  const opciones = [];
+  // Generamos los últimos 12 meses + el mes actual, más recientes primero
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+    const ym = d.toISOString().slice(0,7);
+    opciones.push(ym);
+  }
+  sel.innerHTML = opciones.map(m => `<option value="${m}">${formatMes(m)}</option>`).join('');
+  sel.value = mesActualISO();
+}
+
+async function loadObjetivos() {
+  poblarSelectorMesObjetivos();
+  const mes = document.getElementById('obj-mes').value || mesActualISO();
+  document.getElementById('obj-matriz-wrap').innerHTML = '<div class="loading"><div class="spinner"></div>Cargando objetivos...</div>';
+  try {
+    const r = await fetch(`${API}/api/objetivos/avance?mes=${mes}`);
+    const j = await r.json();
+    objetivosAvanceData = j.data || {};
+    renderObjetivosStats();
+    renderObjetivosMatriz();
+  } catch(e) {
+    document.getElementById('obj-matriz-wrap').innerHTML = '<div class="empty">Error al cargar objetivos</div>';
+  }
+}
+
+function onCambioMesObjetivos() {
+  loadObjetivos();
+}
+
+function semaforoPct(pct) {
+  if (pct >= 95) return 'green';
+  if (pct >= 70) return 'yellow';
+  return 'red';
+}
+
+function barraProgreso(pct) {
+  const clamped = Math.min(100, Math.max(0, pct));
+  const sem = semaforoPct(pct);
+  return `<div class="obj-progress-wrap">
+    <div class="obj-progress-bar"><div class="obj-progress-fill semaforo-${sem}" style="width:${clamped}%"></div></div>
+    <span class="obj-pct-label semaforo-${sem}">${Math.round(pct)}%</span>
+  </div>`;
+}
+
+function renderObjetivosStats() {
+  if (!objetivosAvanceData) return;
+  let facturacionReal = 0, facturacionObjetivo = 0, cajasReal = 0, cajasObjetivo = 0;
+  Object.values(objetivosAvanceData).forEach(porProveedor => {
+    Object.values(porProveedor).forEach(m => {
+      facturacionReal += m.facturacion_real;
+      facturacionObjetivo += m.facturacion_objetivo;
+      cajasReal += m.cajas_real;
+      cajasObjetivo += m.cajas_objetivo;
+    });
+  });
+  const pctFact = facturacionObjetivo > 0 ? (facturacionReal / facturacionObjetivo * 100) : 0;
+  const pctCajas = cajasObjetivo > 0 ? (cajasReal / cajasObjetivo * 100) : 0;
+
+  document.getElementById('obj-stats').innerHTML = `
+    <div class="stat-card accent-green">
+      <div class="stat-label">Facturación real / objetivo</div>
+      <div class="stat-value" style="color:#3ecfb2;font-size:18px">$${fmtMoney(facturacionReal)} <span style="color:var(--muted);font-size:13px">/ $${fmtMoney(facturacionObjetivo)}</span></div>
+      <div class="stat-sub">${Math.round(pctFact)}% de cumplimiento</div>
+    </div>
+    <div class="stat-card accent-teal">
+      <div class="stat-label">Cajas real / objetivo</div>
+      <div class="stat-value" style="color:var(--accent2);font-size:18px">${fmt(cajasReal)} <span style="color:var(--muted);font-size:13px">/ ${fmt(cajasObjetivo)}</span></div>
+      <div class="stat-sub">${Math.round(pctCajas)}% de cumplimiento</div>
+    </div>`;
+}
+
+function renderObjetivosMatriz() {
+  const wrap = document.getElementById('obj-matriz-wrap');
+  if (!objetivosAvanceData || !Object.keys(objetivosAvanceData).length) {
+    wrap.innerHTML = '<div class="empty">Sin objetivos cargados para este mes. Usá "Cargar / Editar objetivos" para empezar.</div>';
+    return;
+  }
+
+  let html = `<table><thead><tr>
+    <th style="min-width:220px">Vendedor / Proveedor</th>
+    <th class="td-num">Ventas $</th>
+    <th class="td-num">Objetivo $</th>
+    <th>% Cumpl. Ventas $</th>
+    <th class="td-num">Cajas</th>
+    <th class="td-num">Objetivo cajas</th>
+    <th>% Cumpl. Cajas</th>
+    <th class="td-num">Cartera</th>
+    <th class="td-num">Con compra</th>
+    <th class="td-num">Cob %</th>
+    <th class="td-num">Objetivo Cob %</th>
+    <th>% Cumpl. Cobertura</th>
+  </tr></thead><tbody>`;
+
+  Object.keys(objetivosAvanceData).sort().forEach(vendedor => {
+    const porProveedor = objetivosAvanceData[vendedor];
+    const proveedores = Object.keys(porProveedor).sort();
+
+    // Totales del vendedor
+    let vFactReal=0, vFactObj=0, vCajasReal=0, vCajasObj=0, vCartera=0, vConCompra=0, vCoberturaObjProm=0, countCobObj=0;
+    proveedores.forEach(p => {
+      const m = porProveedor[p];
+      vFactReal += m.facturacion_real; vFactObj += m.facturacion_objetivo;
+      vCajasReal += m.cajas_real; vCajasObj += m.cajas_objetivo;
+      vCartera = m.clientes_cartera; // mismo valor para todos los proveedores del vendedor
+      vConCompra = Math.max(vConCompra, m.clientes_con_compra);
+      if (m.cobertura_objetivo > 0) { vCoberturaObjProm += m.cobertura_objetivo; countCobObj++; }
+    });
+    const pctFactV = vFactObj > 0 ? (vFactReal/vFactObj*100) : 0;
+    const pctCajasV = vCajasObj > 0 ? (vCajasReal/vCajasObj*100) : 0;
+    const coberturaRealV = vCartera > 0 ? (vConCompra/vCartera*100) : 0;
+    const coberturaObjV = countCobObj > 0 ? vCoberturaObjProm/countCobObj : 0;
+    const pctCobV = coberturaObjV > 0 ? (coberturaRealV/coberturaObjV*100) : 0;
+
+    html += `<tr class="mtx-level-0">
+      <td style="font-weight:800">${vendedor}</td>
+      <td class="td-num">$${fmtMoney(vFactReal)}</td>
+      <td class="td-num">$${fmtMoney(vFactObj)}</td>
+      <td>${barraProgreso(pctFactV)}</td>
+      <td class="td-num">${fmt(vCajasReal)}</td>
+      <td class="td-num">${fmt(vCajasObj)}</td>
+      <td>${barraProgreso(pctCajasV)}</td>
+      <td class="td-num">${vCartera}</td>
+      <td class="td-num">${vConCompra}</td>
+      <td class="td-num">${coberturaRealV.toFixed(1)}%</td>
+      <td class="td-num">${coberturaObjV > 0 ? coberturaObjV.toFixed(1)+'%' : '<span class="td-muted">—</span>'}</td>
+      <td>${coberturaObjV > 0 ? barraProgreso(pctCobV) : '<span class="td-muted">Sin objetivo</span>'}</td>
+    </tr>`;
+
+    proveedores.forEach(p => {
+      const m = porProveedor[p];
+      const pctFact = m.facturacion_objetivo > 0 ? (m.facturacion_real/m.facturacion_objetivo*100) : 0;
+      const pctCajas = m.cajas_objetivo > 0 ? (m.cajas_real/m.cajas_objetivo*100) : 0;
+      const pctCob = m.cobertura_objetivo > 0 ? (m.cobertura_real/m.cobertura_objetivo*100) : 0;
+
+      html += `<tr class="mtx-level-2">
+        <td>${p}</td>
+        <td class="td-num">$${fmtMoney(m.facturacion_real)}</td>
+        <td class="td-num">$${fmtMoney(m.facturacion_objetivo)}</td>
+        <td>${m.facturacion_objetivo > 0 ? barraProgreso(pctFact) : '<span class="td-muted">Sin objetivo</span>'}</td>
+        <td class="td-num">${fmt(m.cajas_real)}</td>
+        <td class="td-num">${fmt(m.cajas_objetivo)}</td>
+        <td>${m.cajas_objetivo > 0 ? barraProgreso(pctCajas) : '<span class="td-muted">Sin objetivo</span>'}</td>
+        <td class="td-num">${m.clientes_cartera}</td>
+        <td class="td-num">${m.clientes_con_compra}</td>
+        <td class="td-num">${m.cobertura_real.toFixed(1)}%</td>
+        <td class="td-num">${m.cobertura_objetivo > 0 ? m.cobertura_objetivo.toFixed(1)+'%' : '<span class="td-muted">—</span>'}</td>
+        <td>${m.cobertura_objetivo > 0 ? barraProgreso(pctCob) : '<span class="td-muted">Sin objetivo</span>'}</td>
+      </tr>`;
+    });
+  });
+
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+// ── Editor de objetivos (modal) ──────────────────────────
+async function abrirEditorObjetivos() {
+  document.getElementById('objetivos-editor-overlay').classList.add('open');
+  document.getElementById('objetivos-editor-content').innerHTML = '<div class="loading"><div class="spinner"></div>Cargando...</div>';
+
+  const mes = document.getElementById('obj-mes').value || mesActualISO();
+
+  // Traer proveedores existentes desde Stock (ya cargado en el resto del dashboard)
+  let proveedores = [];
+  if (typeof stockData !== 'undefined' && stockData && stockData.length) {
+    proveedores = [...new Set(stockData.map(d => d.proveedor))].filter(p => p && p !== 'Sin proveedor').sort();
+  }
+
+  let objetivosExistentes = {};
+  try {
+    const r = await fetch(`${API}/api/objetivos?mes=${mes}`);
+    const j = await r.json();
+    objetivosExistentes = j.objetivos || {};
+  } catch(e) { /* sin objetivos previos, está bien */ }
+
+  renderEditorObjetivos(mes, proveedores, objetivosExistentes);
+}
+
+function renderEditorObjetivos(mes, proveedores, objetivosExistentes) {
+  const vendedores = ['JK', 'KAIRON'];
+
+  const tabsHtml = vendedores.map((v,i) =>
+    `<button class="btn-refresh" id="obj-edit-tab-${v}" style="${i===0?'background:var(--accent2);color:#0b1a18;border-color:var(--accent2)':''}" onclick="cambiarTabEditorObjetivos('${v}')">${v}</button>`
+  ).join(' ');
+
+  document.getElementById('objetivos-editor-content').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+      <div>
+        <h3>Cargar / Editar objetivos</h3>
+        <p style="margin:0">Mes: <strong style="color:var(--text)">${formatMes(mes)}</strong></p>
+      </div>
+      <button class="btn-cancel" style="padding:6px 14px;font-size:12px" onclick="cerrarEditorObjetivos()">✕ Cerrar</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px">${tabsHtml}</div>
+    <div id="obj-editor-form-wrap"></div>
+    <div class="modal-actions" style="margin-top:20px">
+      <button class="btn-generar" style="flex:1" onclick="guardarObjetivosVendedor('${mes}')">Guardar objetivos</button>
+    </div>
+  `;
+
+  window._objEditorState = { mes, proveedores, objetivosExistentes, vendedorActivo: vendedores[0] };
+  renderFormularioObjetivos(vendedores[0]);
+}
+
+function cambiarTabEditorObjetivos(vendedor) {
+  window._objEditorState.vendedorActivo = vendedor;
+  ['JK','KAIRON'].forEach(v => {
+    const btn = document.getElementById(`obj-edit-tab-${v}`);
+    if (btn) btn.style.background = v===vendedor ? 'var(--accent2)' : '';
+    if (btn) btn.style.color = v===vendedor ? '#0b1a18' : '';
+    if (btn) btn.style.borderColor = v===vendedor ? 'var(--accent2)' : '';
+  });
+  renderFormularioObjetivos(vendedor);
+}
+
+function renderFormularioObjetivos(vendedor) {
+  const { proveedores, objetivosExistentes } = window._objEditorState;
+  const objVendedor = objetivosExistentes[vendedor] || {};
+
+  const filas = proveedores.map(p => {
+    const obj = objVendedor[p] || { facturacion: 0, cajas: 0, cobertura: 0 };
+    const safeId = p.replace(/[^a-zA-Z0-9]/g,'_');
+    return `<div class="obj-input-row">
+      <span style="font-size:13px;color:var(--text)">${p}</span>
+      <input type="number" min="0" step="1000" placeholder="Facturación $" id="obj_${vendedor}_${safeId}_fact" value="${obj.facturacion || ''}">
+      <input type="number" min="0" step="1" placeholder="Cajas" id="obj_${vendedor}_${safeId}_cajas" value="${obj.cajas || ''}">
+      <input type="number" min="0" max="100" step="1" placeholder="Cobertura %" id="obj_${vendedor}_${safeId}_cob" value="${obj.cobertura || ''}">
+    </div>`;
+  }).join('');
+
+  document.getElementById('obj-editor-form-wrap').innerHTML = `
+    <div class="obj-input-row" style="border-bottom:2px solid var(--accent2);padding-bottom:10px;margin-bottom:4px">
+      <span style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase">Proveedor</span>
+      <span style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase">Objetivo $</span>
+      <span style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase">Objetivo cajas</span>
+      <span style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase">Objetivo cobertura</span>
+    </div>
+    ${filas || '<div class="empty">No hay proveedores cargados todavía (revisá Stock).</div>'}
+  `;
+}
+
+async function guardarObjetivosVendedor(mes) {
+  const { proveedores, vendedorActivo } = window._objEditorState;
+  const objetivos = {};
+  proveedores.forEach(p => {
+    const safeId = p.replace(/[^a-zA-Z0-9]/g,'_');
+    const fact = parseFloat(document.getElementById(`obj_${vendedorActivo}_${safeId}_fact`)?.value) || 0;
+    const cajas = parseFloat(document.getElementById(`obj_${vendedorActivo}_${safeId}_cajas`)?.value) || 0;
+    const cob = parseFloat(document.getElementById(`obj_${vendedorActivo}_${safeId}_cob`)?.value) || 0;
+    if (fact > 0 || cajas > 0 || cob > 0) {
+      objetivos[p] = { facturacion: fact, cajas: cajas, cobertura: cob };
+    }
+  });
+
+  try {
+    const r = await fetch(`${API}/api/objetivos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mes, vendedor: vendedorActivo, objetivos })
+    });
+    if (!r.ok) throw new Error('Error al guardar');
+    // Actualizamos el estado local para que si cambian de tab no se pierda lo recién guardado
+    window._objEditorState.objetivosExistentes[vendedorActivo] = objetivos;
+    alert(`Objetivos de ${vendedorActivo} guardados correctamente.`);
+    cerrarEditorObjetivos();
+    loadObjetivos();
+  } catch(e) {
+    alert('Error al guardar los objetivos. Intentá de nuevo.');
+  }
+}
+
+function cerrarEditorObjetivos() {
+  document.getElementById('objetivos-editor-overlay').classList.remove('open');
 }
 
 // Boot

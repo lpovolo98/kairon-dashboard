@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from pydantic import BaseModel
 import threading
 
 load_dotenv()
@@ -158,6 +159,32 @@ def get_proveedores_por_producto(models, uid):
         if tmpl_id not in por_tmpl or r["id"] > por_tmpl[tmpl_id]["id"]:
             por_tmpl[tmpl_id] = {"id": r["id"], "proveedor": r["partner_id"][1]}
     return {tmpl_id: v["proveedor"] for tmpl_id, v in por_tmpl.items()}
+
+# ─── Objetivos (persistidos en Railway Volume) ───────────────
+# En producción (Railway) el volumen está montado en /data, así que
+# escribir ahí sobrevive a cualquier deploy nuevo. En desarrollo local,
+# si /data no existe, usamos una carpeta local — no persiste entre
+# máquinas pero al menos no rompe nada al correr localmente.
+_DATA_DIR = "/data" if os.path.isdir("/data") else os.path.dirname(os.path.abspath(__file__))
+OBJETIVOS_PATH = os.path.join(_DATA_DIR, "objetivos.json")
+_objetivos_lock = threading.Lock()
+
+def cargar_objetivos():
+    """Estructura: { "2026-06": { "JK": { "Alimentos Argentinos Nutregal SA":
+       {"facturacion": 3000000, "cajas": 500, "cobertura": 80}, ... }, "KAIRON": {...} } }"""
+    with _objetivos_lock:
+        if not os.path.exists(OBJETIVOS_PATH):
+            return {}
+        try:
+            with open(OBJETIVOS_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+def guardar_objetivos(data):
+    with _objetivos_lock:
+        with open(OBJETIVOS_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ─── Data builders ──────────────────────────────────────────
 
@@ -390,7 +417,7 @@ def build_clientes_data(uid, models):
 
     ordenes = odoo_call(models, uid, "sale.order", "search_read",
         [["state", "in", ["sale", "done"]], ["date_order", ">=", fecha_desde]],
-        ["id", "partner_id", "date_order", "amount_total"]
+        ["id", "partner_id", "date_order", "amount_total", "user_id"]
     )
     order_ids = [o["id"] for o in ordenes]
     order_by_partner = defaultdict(list)
@@ -436,6 +463,15 @@ def build_clientes_data(uid, models):
         monto_90d = sum(o["amount_total"] for o in ords)
         num_ordenes = len(ords)
 
+        # Vendedores que le vendieron en los últimos 90 días (sale.order.user_id,
+        # puede ser más de uno si distintas órdenes tuvieron distinto vendedor)
+        vendedores = sorted({o["user_id"][1] for o in ords if o.get("user_id")})
+
+        # Fecha del último pedido (cualquiera, no solo de este mes)
+        ultimo_pedido_fecha = None
+        if ords:
+            ultimo_pedido_fecha = max(ords, key=lambda o: o["date_order"])["date_order"][:10]
+
         # Categorías que compró
         categs_compradas = set()
         for o in ords:
@@ -471,10 +507,86 @@ def build_clientes_data(uid, models):
             "categorias_compradas": sorted(categs_compradas),
             "categorias_faltantes": sorted(categs_faltantes),
             "oportunidad": oportunidad,
+            "vendedores": vendedores,
+            "ultimo_pedido_fecha": ultimo_pedido_fecha,
         })
 
     result.sort(key=lambda x: (-x["monto_90d"]))
     return result
+
+
+def build_cliente_detalle_data(uid, models, partner_id):
+    """Histórico completo de ventas de UN cliente (365 días): líneas con
+    producto, proveedor, SKU, mes, cajas y facturación — para el detalle
+    expandido al hacer click en un cliente desde el módulo Clientes."""
+    fecha_desde = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    uom_factors = get_uom_factors(models, uid)
+    proveedores_map = get_proveedores_por_producto(models, uid)
+
+    ordenes = odoo_call(models, uid, "sale.order", "search_read",
+        [["partner_id", "=", partner_id], ["state", "in", ["sale", "done"]],
+         ["date_order", ">=", fecha_desde]],
+        ["id", "date_order", "amount_total", "user_id", "name"]
+    )
+    order_ids = [o["id"] for o in ordenes]
+    order_map = {o["id"]: o for o in ordenes}
+
+    lineas = []
+    if order_ids:
+        lineas = odoo_call(models, uid, "sale.order.line", "search_read",
+            [["order_id", "in", order_ids]],
+            ["order_id", "product_id", "qty_invoiced", "product_uom_id", "price_subtotal", "price_total"]
+        )
+
+    prod_ids = list({l["product_id"][0] for l in lineas if l["product_id"]})
+    prod_info = {}
+    if prod_ids:
+        prods = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+            "product.product", "search_read",
+            [[["id", "in", prod_ids]]],
+            {"fields": ["id", "name", "categ_id", "default_code", "x_studio_unidades_por_caja", "product_tmpl_id"]}
+        )
+        for p in prods:
+            tmpl_id = p["product_tmpl_id"][0] if p.get("product_tmpl_id") else None
+            prod_info[p["id"]] = {
+                "nombre":   p["name"],
+                "categoria": p["categ_id"][1] if p["categ_id"] else "Sin categoría",
+                "codigo":   p.get("default_code") or "",
+                "unid_caja": p.get("x_studio_unidades_por_caja") or 1,
+                "proveedor": proveedores_map.get(tmpl_id, "Sin proveedor"),
+            }
+
+    filas = []
+    for l in lineas:
+        oid = l["order_id"][0] if l["order_id"] else None
+        if not oid or oid not in order_map:
+            continue
+        orden = order_map[oid]
+        pid = l["product_id"][0] if l["product_id"] else None
+        if not pid or pid not in prod_info:
+            continue
+        info = prod_info[pid]
+        unid_caja = info["unid_caja"] or 1
+        unidades_facturadas = normalizar_qty(l["qty_invoiced"], l["product_uom_id"], uom_factors)
+        cajas = unidades_facturadas / unid_caja if unid_caja > 0 else 0
+
+        filas.append({
+            "mes":          orden["date_order"][:7],
+            "fecha":        orden["date_order"][:10],
+            "orden":        orden.get("name", ""),
+            "vendedor":     orden["user_id"][1] if orden.get("user_id") else "Sin vendedor",
+            "producto":     info["nombre"],
+            "codigo":       info["codigo"],
+            "categoria":    info["categoria"],
+            "proveedor":    info["proveedor"],
+            "cajas":        round(cajas, 3),
+            "monto_total":  round(l.get("price_total", l["price_subtotal"]), 2),
+        })
+
+    return filas
+
+
 
 
 
@@ -698,6 +810,103 @@ def get_cartera(force: bool = False):
     data = build_cartera_data(uid, models)
     cache_set("cartera", data)
     return {"data": data, "cached": False, "ttl": CACHE_TTL}
+
+# Caché propio para detalle de cliente (key = partner_id), TTL más corto
+# porque son muchos clientes posibles y no vale la pena guardarlos todos
+# para siempre en el caché principal.
+_cliente_detalle_cache = {}
+CLIENTE_DETALLE_TTL = 300  # 5 minutos
+
+@app.get("/api/cliente/{partner_id}/detalle")
+def get_cliente_detalle(partner_id: int, force: bool = False):
+    now = time.time()
+    cached = _cliente_detalle_cache.get(partner_id)
+    if cached and not force and (now - cached["ts"]) < CLIENTE_DETALLE_TTL:
+        return {"data": cached["data"], "cached": True}
+    uid, models = odoo_connect()
+    data = build_cliente_detalle_data(uid, models, partner_id)
+    _cliente_detalle_cache[partner_id] = {"data": data, "ts": now}
+    return {"data": data, "cached": False}
+
+# ─── Objetivos ────────────────────────────────────────────────
+class ObjetivoProveedor(BaseModel):
+    facturacion: float = 0
+    cajas: float = 0
+    cobertura: float = 0  # % objetivo de cobertura de cartera (0-100)
+
+class GuardarObjetivosBody(BaseModel):
+    mes: str  # "YYYY-MM"
+    vendedor: str  # "JK" o "KAIRON"
+    objetivos: dict[str, ObjetivoProveedor]  # { "Proveedor X": {...}, ... }
+
+@app.get("/api/objetivos")
+def get_objetivos(mes: str = None):
+    """Si se pasa ?mes=YYYY-MM devuelve solo ese mes, sino todo el histórico."""
+    data = cargar_objetivos()
+    if mes:
+        return {"mes": mes, "objetivos": data.get(mes, {})}
+    return {"objetivos": data}
+
+@app.post("/api/objetivos")
+def post_objetivos(body: GuardarObjetivosBody):
+    data = cargar_objetivos()
+    if body.mes not in data:
+        data[body.mes] = {}
+    data[body.mes][body.vendedor] = {k: v.dict() for k, v in body.objetivos.items()}
+    guardar_objetivos(data)
+    return {"ok": True}
+
+@app.get("/api/objetivos/avance")
+def get_objetivos_avance(mes: str):
+    """Cruza los objetivos guardados de un mes con la venta real (Ventas +
+    Cartera) para armar la matriz Vendedor > Proveedor con % de cumplimiento."""
+    objetivos_data = cargar_objetivos().get(mes, {})
+
+    uid, models = odoo_connect()
+    ventas = build_ventas_data(uid, models)
+    cartera = build_cartera_data(uid, models)
+
+    ventas_mes = [v for v in ventas if v["mes"] == mes]
+
+    # Cartera por vendedor (para el denominador de cobertura)
+    cartera_por_vendedor = defaultdict(list)
+    for c in cartera:
+        cartera_por_vendedor[c["vendedor"]].append(c)
+
+    resultado = {}
+    vendedores = set(list(objetivos_data.keys()) + list(cartera_por_vendedor.keys()))
+    for vendedor in vendedores:
+        ventas_vendedor = [v for v in ventas_mes if v.get("vendedor") == vendedor]
+        proveedores_con_venta = {v["proveedor"] for v in ventas_vendedor}
+        proveedores_con_objetivo = set(objetivos_data.get(vendedor, {}).keys())
+        todos_proveedores = proveedores_con_venta | proveedores_con_objetivo
+
+        resultado[vendedor] = {}
+        cartera_vendedor = cartera_por_vendedor.get(vendedor, [])
+        clientes_cartera_total = len(cartera_vendedor)
+        clientes_cartera_ids = {c["id"] for c in cartera_vendedor}
+
+        for proveedor in todos_proveedores:
+            filas_prov = [v for v in ventas_vendedor if v["proveedor"] == proveedor]
+            facturacion_real = sum(f["monto_total"] for f in filas_prov)
+            cajas_real = sum(f["cajas"] for f in filas_prov)
+            clientes_con_compra = len({f["partner_id"] for f in filas_prov} & clientes_cartera_ids)
+            cobertura_real = round(clientes_con_compra / clientes_cartera_total * 100, 1) if clientes_cartera_total > 0 else 0
+
+            obj = objetivos_data.get(vendedor, {}).get(proveedor, {"facturacion": 0, "cajas": 0, "cobertura": 0})
+
+            resultado[vendedor][proveedor] = {
+                "facturacion_real": round(facturacion_real, 2),
+                "facturacion_objetivo": obj.get("facturacion", 0),
+                "cajas_real": round(cajas_real, 2),
+                "cajas_objetivo": obj.get("cajas", 0),
+                "clientes_con_compra": clientes_con_compra,
+                "clientes_cartera": clientes_cartera_total,
+                "cobertura_real": cobertura_real,
+                "cobertura_objetivo": obj.get("cobertura", 0),
+            }
+
+    return {"mes": mes, "data": resultado}
 
 @app.get("/api/status")
 def status():
