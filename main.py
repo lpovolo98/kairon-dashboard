@@ -7,7 +7,7 @@ from datetime import datetime, date, timedelta
 from collections import defaultdict
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -1100,11 +1100,11 @@ def enviar_reporte_whatsapp(vendedor="JK"):
 
     try:
         client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        dashboard_link = f"{base_url}/?tab=objetivos&vendedor={vendedor}"
+        reporte_link = f"{base_url}/reporte/{vendedor}?mes={mes}"
         client.messages.create(
             from_=TWILIO_WHATSAPP_FROM,
             to=REPORTE_WHATSAPP_TO,
-            body=f"📊 Avance de objetivos — {vendedor} — {formatMes_py(mes)}\nVer en el dashboard: {dashboard_link}",
+            body=f"📊 Avance de objetivos — {vendedor} — {formatMes_py(mes)}\nVer detalle: {reporte_link}",
             media_url=[img_url],
         )
     except Exception as e:
@@ -1189,6 +1189,105 @@ def refresh_all():
 
 # ─── Serve frontend ─────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/reporte/{vendedor}", response_class=HTMLResponse)
+def reporte_vendedor_html(vendedor: str, mes: str = None):
+    """Vista standalone de solo lectura: muestra ÚNICAMENTE el avance de
+    Objetivos de un vendedor puntual, sin nav ni acceso al resto del
+    dashboard. Pensada para el link que se manda por WhatsApp."""
+    mes = mes or date.today().strftime("%Y-%m")
+    try:
+        uid, models = odoo_connect()
+        avance = build_objetivos_avance(uid, models, mes)
+    except Exception as e:
+        return HTMLResponse(f"<html><body style='background:#0b0d11;color:#e8eaf0;font-family:sans-serif;padding:40px'>Error consultando datos: {e}</body></html>", status_code=500)
+
+    avance_vendedor = avance.get(vendedor)
+    if not avance_vendedor:
+        return HTMLResponse(f"<html><body style='background:#0b0d11;color:#e8eaf0;font-family:sans-serif;padding:40px'>No hay datos para el vendedor '{vendedor}' en {mes}.</body></html>", status_code=404)
+
+    proveedores = sorted(avance_vendedor.keys())
+
+    def barra(pct, label):
+        if pct >= 95: color = "#3ecfb2"
+        elif pct >= 70: color = "#f5c842"
+        else: color = "#ff4f4f"
+        clamped = min(100, max(0, pct))
+        return f'''<div style="display:flex;align-items:center;gap:8px;min-width:140px">
+          <div style="flex:1;background:#1a1e28;border-radius:4px;height:8px;overflow:hidden">
+            <div style="height:100%;border-radius:4px;width:{clamped}%;background:{color}"></div>
+          </div>
+          <span style="font-size:12px;font-weight:700;color:{color};min-width:36px;text-align:right">{round(pct)}%</span>
+        </div>'''
+
+    def fmt_money(n): return f"${n:,.0f}".replace(",", ".")
+    def fmt_num(n): return f"{n:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    vFactReal = sum(m["facturacion_real"] for m in avance_vendedor.values())
+    vFactObj  = sum(m["facturacion_objetivo"] for m in avance_vendedor.values())
+    vCajasReal = sum(m["cajas_real"] for m in avance_vendedor.values())
+    vCajasObj  = sum(m["cajas_objetivo"] for m in avance_vendedor.values())
+    vCartera = next(iter(avance_vendedor.values()))["clientes_cartera"] if avance_vendedor else 0
+    vConCompra = max((m["clientes_con_compra"] for m in avance_vendedor.values()), default=0)
+    coberturaRealV = round(vConCompra / vCartera * 100, 1) if vCartera > 0 else 0
+    objsCob = [m["cobertura_objetivo"] for m in avance_vendedor.values() if m["cobertura_objetivo"] > 0]
+    coberturaObjV = sum(objsCob)/len(objsCob) if objsCob else 0
+
+    filas_html = ""
+    for p in proveedores:
+        m = avance_vendedor[p]
+        pct_fact = (m["facturacion_real"]/m["facturacion_objetivo"]*100) if m["facturacion_objetivo"] > 0 else None
+        pct_cajas = (m["cajas_real"]/m["cajas_objetivo"]*100) if m["cajas_objetivo"] > 0 else None
+        pct_cob = (m["cobertura_real"]/m["cobertura_objetivo"]*100) if m["cobertura_objetivo"] > 0 else None
+        filas_html += f'''<tr style="border-bottom:1px solid #252a38">
+          <td style="padding:12px 14px;font-size:13px">{p}</td>
+          <td style="padding:12px 14px;text-align:right;font-size:13px">{fmt_money(m["facturacion_real"])}<br><span style="color:#5c6278;font-size:11px">obj: {fmt_money(m["facturacion_objetivo"]) if m["facturacion_objetivo"]>0 else "—"}</span></td>
+          <td style="padding:12px 14px">{barra(pct_fact, "vtas") if pct_fact is not None else "<span style=color:#5c6278>Sin objetivo</span>"}</td>
+          <td style="padding:12px 14px;text-align:right;font-size:13px">{fmt_num(m["cajas_real"])}<br><span style="color:#5c6278;font-size:11px">obj: {fmt_num(m["cajas_objetivo"]) if m["cajas_objetivo"]>0 else "—"}</span></td>
+          <td style="padding:12px 14px">{barra(pct_cajas, "cajas") if pct_cajas is not None else "<span style=color:#5c6278>Sin objetivo</span>"}</td>
+          <td style="padding:12px 14px;text-align:right;font-size:13px">{m["cobertura_real"]:.1f}% <span style="color:#5c6278">/ obj {m["cobertura_objetivo"]:.1f}%</span></td>
+          <td style="padding:12px 14px">{barra(pct_cob, "cob") if pct_cob is not None else "<span style=color:#5c6278>Sin objetivo</span>"}</td>
+        </tr>'''
+
+    html = f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Avance Objetivos — {vendedor}</title>
+<style>
+  body {{ background:#0b0d11; color:#e8eaf0; font-family:'Segoe UI',Arial,sans-serif; margin:0; padding:24px 16px; }}
+  h1 {{ font-size:20px; margin:0 0 4px; }}
+  .sub {{ color:#5c6278; font-size:13px; margin-bottom:20px; }}
+  table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+  thead th {{ background:#1a1e28; padding:10px 14px; text-align:left; font-size:10px; color:#5c6278; text-transform:uppercase; letter-spacing:1px; }}
+  .tablewrap {{ overflow-x:auto; border-radius:10px; border:1px solid #252a38; }}
+  .total-row td {{ background:#1a1e28; border-top:2px solid #3ecfb2; font-weight:800; padding:14px; }}
+  .footer {{ margin-top:16px; color:#5c6278; font-size:11px; text-align:center; }}
+</style></head>
+<body>
+  <h1>Avance Objetivos — {vendedor}</h1>
+  <div class="sub">{formatMes_py(mes)} · Kairon Distribuciones</div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th>Proveedor</th><th>Ventas $</th><th>% Vtas</th><th>Cajas</th><th>% Cajas</th><th>Cobertura</th><th>% Cumpl.</th>
+    </tr></thead>
+    <tbody>
+      <tr class="total-row">
+        <td>TOTAL</td>
+        <td style="text-align:right">{fmt_money(vFactReal)}<br><span style="color:#5c6278;font-size:11px;font-weight:400">obj: {fmt_money(vFactObj) if vFactObj>0 else "—"}</span></td>
+        <td>{barra((vFactReal/vFactObj*100) if vFactObj>0 else 0, "vtas")}</td>
+        <td style="text-align:right">{fmt_num(vCajasReal)}<br><span style="color:#5c6278;font-size:11px;font-weight:400">obj: {fmt_num(vCajasObj) if vCajasObj>0 else "—"}</span></td>
+        <td>{barra((vCajasReal/vCajasObj*100) if vCajasObj>0 else 0, "cajas")}</td>
+        <td style="text-align:right">{coberturaRealV:.1f}% <span style="color:#5c6278">/ obj {coberturaObjV:.1f}%</span></td>
+        <td>{barra((coberturaRealV/coberturaObjV*100) if coberturaObjV>0 else 0, "cob")}</td>
+      </tr>
+      {filas_html}
+    </tbody>
+  </table>
+  </div>
+  <div class="footer">Vista de solo lectura · Reporte automático diario</div>
+</body></html>"""
+    return HTMLResponse(html)
 
 @app.get("/")
 def root():
