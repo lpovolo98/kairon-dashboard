@@ -920,7 +920,82 @@ def get_objetivos_avance(mes: str):
     resultado = build_objetivos_avance(*odoo_connect(), mes)
     return {"mes": mes, "data": resultado}
 
-# ─── Reporte diario por WhatsApp (imagen del avance de Objetivos) ────
+@app.get("/api/pedidos")
+def get_pedidos(mes: str):
+    """Datos de órdenes de venta (cantidades ORDENADAS, no facturadas) para
+    la sección de Pedidos en la solapa Objetivos. Permite ver el avance del
+    vendedor en tiempo real sin esperar a que se facture (48hs de demora).
+    Incluye: total $ por proveedor/vendedor, clientes con compra, cajas ordenadas,
+    y distribución diaria ($ y clientes) para los gráficos."""
+    uid, models = odoo_connect()
+    uom_factors = get_uom_factors(models, uid)
+    proveedores_map = get_proveedores_por_producto(models, uid)
+
+    fecha_desde = f"{mes}-01"
+    # Último día del mes
+    y, m_num = int(mes[:4]), int(mes[5:7])
+    if m_num == 12:
+        fecha_hasta = f"{y}-12-31"
+    else:
+        fecha_hasta = (date(y, m_num + 1, 1) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    ordenes = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "sale.order", "search_read",
+        [[["state", "in", ["draft", "sent", "sale", "done"]],
+          ["date_order", ">=", fecha_desde],
+          ["date_order", "<=", fecha_hasta]]],
+        {"fields": ["id", "name", "partner_id", "date_order", "amount_total", "user_id"]}
+    )
+    order_ids = [o["id"] for o in ordenes]
+    order_map = {o["id"]: o for o in ordenes}
+
+    lineas = []
+    if order_ids:
+        lineas = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+            "sale.order.line", "search_read",
+            [[["order_id", "in", order_ids]]],
+            {"fields": ["order_id", "product_id", "product_qty", "product_uom_id", "price_total"]}
+        )
+
+    prod_ids = list({l["product_id"][0] for l in lineas if l["product_id"]})
+    prod_info = {}
+    if prod_ids:
+        prods = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+            "product.product", "search_read",
+            [[["id", "in", prod_ids]]],
+            {"fields": ["id", "name", "x_studio_unidades_por_caja", "product_tmpl_id"]}
+        )
+        for p in prods:
+            tmpl_id = p["product_tmpl_id"][0] if p.get("product_tmpl_id") else None
+            prod_info[p["id"]] = {
+                "unid_caja": p.get("x_studio_unidades_por_caja") or 1,
+                "proveedor": proveedores_map.get(tmpl_id, "Sin proveedor"),
+            }
+
+    # Construir filas por línea de pedido
+    filas = []
+    for l in lineas:
+        oid = l["order_id"][0] if l["order_id"] else None
+        if not oid or oid not in order_map: continue
+        orden = order_map[oid]
+        pid = l["product_id"][0] if l["product_id"] else None
+        if not pid: continue
+        info = prod_info.get(pid, {"unid_caja": 1, "proveedor": "Sin proveedor"})
+        # product_qty ya viene normalizado a unidades base en sale.order.line
+        unidades = l["product_qty"]
+        cajas = unidades / info["unid_caja"] if info["unid_caja"] > 0 else unidades
+        filas.append({
+            "fecha":       orden["date_order"][:10],
+            "partner_id":  orden["partner_id"][0] if orden["partner_id"] else None,
+            "vendedor":    orden["user_id"][1] if orden.get("user_id") else "Sin vendedor",
+            "proveedor":   info["proveedor"],
+            "cajas":       round(cajas, 3),
+            "monto_total": round(l.get("price_total", 0), 2),
+        })
+
+    return {"mes": mes, "data": filas}
+
+
 def _semaforo_color(pct):
     if pct >= 95: return (62, 207, 178)   # verde (--green)
     if pct >= 70: return (245, 200, 66)   # amarillo (--yellow)

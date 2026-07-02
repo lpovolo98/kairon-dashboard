@@ -599,8 +599,37 @@ canvas { max-height: 200px; }
     <button class="btn-pedido" style="margin-left:auto" onclick="abrirEditorObjetivos()">✎ Cargar / Editar objetivos</button>
   </div>
 
-  <div class="stats-row" id="obj-stats"></div>
+  <!-- Sección Pedidos (cantidades ordenadas, tiempo real) -->
+  <div style="margin-bottom:8px">
+    <span style="font-size:13px;font-weight:700;color:var(--text)">Pedidos del mes</span>
+    <span style="font-size:11px;color:var(--muted);margin-left:8px">Cantidades ordenadas · tiempo real, sin esperar facturación</span>
+  </div>
+  <div class="stats-row" id="obj-pedidos-stats" style="margin-bottom:14px"></div>
+  <div class="chart-grid" style="margin-bottom:20px">
+    <div class="chart-card">
+      <div class="chart-title">Ventas $ por día <span>órdenes confirmadas</span></div>
+      <canvas id="chart-pedidos-monto" style="max-height:180px"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Clientes con compra por día</div>
+      <canvas id="chart-pedidos-clientes" style="max-height:180px"></canvas>
+    </div>
+  </div>
 
+  <div style="margin-bottom:8px">
+    <span style="font-size:12px;font-weight:700;color:var(--text)">Avance por proveedor (pedidos)</span>
+    <span style="font-size:11px;color:var(--muted);margin-left:8px">Mismo objetivo, base = cantidades ordenadas</span>
+  </div>
+  <div class="table-wrap" id="obj-pedidos-matriz-wrap" style="margin-bottom:24px">
+    <div class="loading"><div class="spinner"></div>Cargando pedidos...</div>
+  </div>
+
+  <!-- Sección Facturación (datos existentes) -->
+  <div style="margin-bottom:8px;border-top:1px solid var(--border);padding-top:20px">
+    <span style="font-size:13px;font-weight:700;color:var(--text)">Avance de objetivos (facturación)</span>
+    <span style="font-size:11px;color:var(--muted);margin-left:8px">Cantidad facturada</span>
+  </div>
+  <div class="stats-row" id="obj-stats"></div>
   <div class="table-wrap" id="obj-matriz-wrap">
     <div class="loading"><div class="spinner"></div>Cargando objetivos...</div>
   </div>
@@ -2175,21 +2204,37 @@ function renderCobrTable() {
     const maxBucket = c.facturas.reduce((worst,f) =>
       order.indexOf(f.bucket) > order.indexOf(worst) ? f.bucket : worst, 'a_vencer');
     const meta = AGING_META[maxBucket];
+    // Si hay filtro de aging activo, mostrar solo la deuda del bucket filtrado,
+    // no la deuda total del cliente. Así $2M de deuda total donde solo $1M
+    // está vencido +60d muestra $1M al filtrar por ese bucket.
+    const deudaMostrada = aging
+      ? c.facturas.filter(f => f.bucket === aging).reduce((s,f) => s + f.saldo, 0)
+      : c.total_deuda;
+    const facturasMostradas = aging
+      ? c.facturas.filter(f => f.bucket === aging).length
+      : c.facturas.length;
     return `<tr class="${sel?'row-selected':''}" onclick="selectCobrCliente(${c.id})" style="cursor:pointer">
       <td class="td-name">${c.nombre}</td>
-      <td class="td-num" style="color:var(--red);font-weight:700">$${fmtMoney(c.total_deuda)}</td>
-      <td class="td-num">${c.facturas.length}</td>
+      <td class="td-num" style="color:var(--red);font-weight:700">$${fmtMoney(deudaMostrada)}</td>
+      <td class="td-num">${facturasMostradas}</td>
       <td><span class="aging-pill ${meta.cls}">${meta.label}</span></td>
       <td class="td-num td-muted">${c.max_vencimiento > 0 ? c.max_vencimiento+' días' : 'vigente'}</td>
     </tr>`;
   }).join('');
 
+  // También ordenar por deuda mostrada (no total) cuando hay filtro aplicado
+  clientes.sort((a,b) => {
+    const dA = aging ? a.facturas.filter(f=>f.bucket===aging).reduce((s,f)=>s+f.saldo,0) : a.total_deuda;
+    const dB = aging ? b.facturas.filter(f=>f.bucket===aging).reduce((s,f)=>s+f.saldo,0) : b.total_deuda;
+    return cobrSortDir * (dB - dA);
+  });
+
   document.getElementById('cobr-table-wrap').innerHTML = `
     <table>
       <thead><tr>
         <th>Cliente</th>
-        <th class="td-num" onclick="cobrSortDir*=-1;renderCobrTable()" style="cursor:pointer">Deuda total ↕</th>
-        <th class="td-num">Facturas</th>
+        <th class="td-num" onclick="cobrSortDir*=-1;renderCobrTable()" style="cursor:pointer">${aging ? 'Deuda en bucket ↕' : 'Deuda total ↕'}</th>
+        <th class="td-num">${aging ? 'Facturas en bucket' : 'Facturas'}</th>
         <th>Peor aging</th>
         <th class="td-num">Días vencido</th>
       </tr></thead>
@@ -2500,23 +2545,196 @@ function poblarSelectorMesObjetivos() {
   sel.value = mesActualISO();
 }
 
+let pedidosRaw = [];
+let chartPedidosMonto = null, chartPedidosClientes = null;
+
 async function loadObjetivos() {
   poblarSelectorMesObjetivos();
   const mes = document.getElementById('obj-mes').value || mesActualISO();
   document.getElementById('obj-matriz-wrap').innerHTML = '<div class="loading"><div class="spinner"></div>Cargando objetivos...</div>';
+  document.getElementById('obj-pedidos-matriz-wrap').innerHTML = '<div class="loading"><div class="spinner"></div>Cargando pedidos...</div>';
+
+  // Cargar ambas fuentes en paralelo
+  const [rAvance, rPedidos] = await Promise.allSettled([
+    fetch(`${API}/api/objetivos/avance?mes=${mes}`),
+    fetch(`${API}/api/pedidos?mes=${mes}`)
+  ]);
+
+  // Avance (facturación)
   try {
-    const r = await fetch(`${API}/api/objetivos/avance?mes=${mes}`);
-    const j = await r.json();
+    const j = await rAvance.value.json();
     objetivosAvanceData = j.data || {};
     renderObjetivosStats();
     renderObjetivosMatriz();
   } catch(e) {
     document.getElementById('obj-matriz-wrap').innerHTML = '<div class="empty">Error al cargar objetivos</div>';
   }
+
+  // Pedidos (cantidades ordenadas)
+  try {
+    const j = await rPedidos.value.json();
+    pedidosRaw = j.data || [];
+    renderPedidosStats();
+    renderPedidosCharts();
+    renderPedidosMatriz();
+  } catch(e) {
+    document.getElementById('obj-pedidos-matriz-wrap').innerHTML = '<div class="empty">Error al cargar pedidos</div>';
+  }
 }
 
 function onCambioMesObjetivos() {
   loadObjetivos();
+}
+
+function renderPedidosStats() {
+  const totalMonto = pedidosRaw.reduce((s,d) => s+d.monto_total, 0);
+  const totalCajas = pedidosRaw.reduce((s,d) => s+d.cajas, 0);
+  const clientesUnicos = new Set(pedidosRaw.map(d => d.partner_id)).size;
+  document.getElementById('obj-pedidos-stats').innerHTML = `
+    <div class="stat-card accent-green">
+      <div class="stat-label">Ventas en pedidos $</div>
+      <div class="stat-value" style="color:#3ecfb2;font-size:20px">$${fmtMoney(totalMonto)}</div>
+      <div class="stat-sub">órdenes confirmadas del mes</div>
+    </div>
+    <div class="stat-card accent-yellow">
+      <div class="stat-label">Clientes con compra</div>
+      <div class="stat-value" style="color:var(--accent)">${clientesUnicos}</div>
+      <div class="stat-sub">clientes únicos con pedido</div>
+    </div>
+    <div class="stat-card accent-teal">
+      <div class="stat-label">Cajas ordenadas</div>
+      <div class="stat-value" style="color:var(--accent2)">${fmt(totalCajas)}</div>
+      <div class="stat-sub">según cantidades ordenadas</div>
+    </div>`;
+}
+
+function renderPedidosCharts() {
+  // Agrupar por día
+  const porDia = {};
+  pedidosRaw.forEach(d => {
+    if (!porDia[d.fecha]) porDia[d.fecha] = { monto: 0, clientes: new Set() };
+    porDia[d.fecha].monto += d.monto_total;
+    porDia[d.fecha].clientes.add(d.partner_id);
+  });
+  const dias = Object.keys(porDia).sort();
+  const labels = dias.map(d => d.slice(8)); // solo DD
+  const montos = dias.map(d => Math.round(porDia[d].monto));
+  const clientes = dias.map(d => porDia[d].clientes.size);
+
+  if (chartPedidosMonto) chartPedidosMonto.destroy();
+  if (chartPedidosClientes) chartPedidosClientes.destroy();
+
+  const baseOpts = {
+    responsive: true, maintainAspectRatio: true,
+    layout: { padding: { top: 14 } },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { color: '#1a1e28' }, ticks: { color: '#5c6278', font: { family: 'Poppins', size: 10 } } },
+      y: { grid: { color: '#1a1e28' }, ticks: { color: '#5c6278', font: { family: 'Poppins', size: 10 } } }
+    }
+  };
+
+  chartPedidosMonto = new Chart(document.getElementById('chart-pedidos-monto'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data: montos, backgroundColor: 'rgba(62,207,178,.3)', borderColor: '#3ecfb2', borderWidth: 1.5, borderRadius: 4 }] },
+    options: { ...baseOpts, plugins: { ...baseOpts.plugins, tooltip: { callbacks: { label: ctx => `$${fmtMoney(ctx.raw)}` } } }, scales: { ...baseOpts.scales, y: { ...baseOpts.scales.y, ticks: { ...baseOpts.scales.y.ticks, callback: v => '$'+fmtMoney(v) } } } }
+  });
+
+  chartPedidosClientes = new Chart(document.getElementById('chart-pedidos-clientes'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data: clientes, backgroundColor: 'rgba(245,200,66,.3)', borderColor: '#f5c842', borderWidth: 1.5, borderRadius: 4 }] },
+    options: baseOpts
+  });
+}
+
+function renderPedidosMatriz() {
+  const wrap = document.getElementById('obj-pedidos-matriz-wrap');
+  if (!pedidosRaw.length) {
+    wrap.innerHTML = '<div class="empty">Sin pedidos para este mes</div>';
+    return;
+  }
+  if (!objetivosAvanceData || !Object.keys(objetivosAvanceData).length) {
+    wrap.innerHTML = '<div class="empty">Cargá objetivos para ver el avance de pedidos</div>';
+    return;
+  }
+
+  // Agrupar pedidos por vendedor > proveedor
+  const tree = {};
+  pedidosRaw.forEach(d => {
+    if (!tree[d.vendedor]) tree[d.vendedor] = {};
+    if (!tree[d.vendedor][d.proveedor]) tree[d.vendedor][d.proveedor] = { monto: 0, cajas: 0, clientes: new Set() };
+    tree[d.vendedor][d.proveedor].monto += d.monto_total;
+    tree[d.vendedor][d.proveedor].cajas += d.cajas;
+    tree[d.vendedor][d.proveedor].clientes.add(d.partner_id);
+  });
+
+  // Obtener cartera por vendedor desde carteraRaw
+  const carteraPorVendedor = {};
+  (carteraRaw || []).forEach(c => {
+    if (!carteraPorVendedor[c.vendedor]) carteraPorVendedor[c.vendedor] = [];
+    carteraPorVendedor[c.vendedor].push(c);
+  });
+
+  const mes = document.getElementById('obj-mes').value || mesActualISO();
+  const esMesActual = mes === mesActualISO();
+  let diasTr = null, diasRest = null;
+  if (esMesActual && diasHabilesInfo) {
+    diasTr = diasHabilesInfo.transcurridos || 1;
+    diasRest = diasHabilesInfo.restantes || 0;
+  }
+  const calcTend = (val) => diasTr ? val + (val / diasTr) * diasRest : null;
+
+  let html = `<table><thead><tr>
+    <th style="min-width:220px">Vendedor / Proveedor</th>
+    <th class="td-num">Pedidos $</th>
+    <th class="td-num">Tendencia $</th>
+    <th class="td-num">Objetivo $</th>
+    <th>% Tend. vs Obj.</th>
+    <th class="td-num">Cajas ordenadas</th>
+    <th class="td-num">Clientes</th>
+  </tr></thead><tbody>`;
+
+  Object.keys(tree).sort().forEach(vendedor => {
+    const provData = tree[vendedor];
+    const totalMonto = Object.values(provData).reduce((s,v) => s+v.monto, 0);
+    const totalCajas = Object.values(provData).reduce((s,v) => s+v.cajas, 0);
+    const totalClientes = new Set(pedidosRaw.filter(d => d.vendedor===vendedor).map(d => d.partner_id)).size;
+    const objVendedor = objetivosAvanceData[vendedor] || {};
+    const totalObj = Object.values(objVendedor).reduce((s,m) => s+m.facturacion_objetivo, 0);
+    const tend = calcTend(totalMonto);
+    const pctTend = (tend !== null && totalObj > 0) ? (tend/totalObj*100) : null;
+
+    html += `<tr class="mtx-level-0">
+      <td style="font-weight:800">${vendedor}</td>
+      <td class="td-num">$${fmtMoney(totalMonto)}</td>
+      <td class="td-num">${tend !== null ? '$'+fmtMoney(tend) : '<span class="td-muted">—</span>'}</td>
+      <td class="td-num">${totalObj > 0 ? '$'+fmtMoney(totalObj) : '<span class="td-muted">Sin objetivo</span>'}</td>
+      <td>${pctTend !== null ? barraProgreso(pctTend) : '<span class="td-muted">—</span>'}</td>
+      <td class="td-num">${fmt(totalCajas)}</td>
+      <td class="td-num">${totalClientes}</td>
+    </tr>`;
+
+    Object.keys(provData).sort().forEach(prov => {
+      const v = provData[prov];
+      const objProv = objVendedor[prov] || {};
+      const objMonto = objProv.facturacion_objetivo || 0;
+      const tendP = calcTend(v.monto);
+      const pctTendP = (tendP !== null && objMonto > 0) ? (tendP/objMonto*100) : null;
+
+      html += `<tr class="mtx-level-2">
+        <td>${prov}</td>
+        <td class="td-num">$${fmtMoney(v.monto)}</td>
+        <td class="td-num">${tendP !== null ? '$'+fmtMoney(tendP) : '<span class="td-muted">—</span>'}</td>
+        <td class="td-num">${objMonto > 0 ? '$'+fmtMoney(objMonto) : '<span class="td-muted">Sin objetivo</span>'}</td>
+        <td>${pctTendP !== null ? barraProgreso(pctTendP) : '<span class="td-muted">—</span>'}</td>
+        <td class="td-num">${fmt(v.cajas)}</td>
+        <td class="td-num">${v.clientes.size}</td>
+      </tr>`;
+    });
+  });
+
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
 }
 
 function semaforoPct(pct) {
@@ -2568,14 +2786,27 @@ function renderObjetivosMatriz() {
     return;
   }
 
+  // Calcular tendencia usando días hábiles (misma lógica que tarjeta Tendencia en Ventas)
+  const mes = document.getElementById('obj-mes').value || mesActualISO();
+  const esMesActual = mes === mesActualISO();
+  let diasTr = null, diasRest = null;
+  if (esMesActual && diasHabilesInfo) {
+    diasTr = diasHabilesInfo.transcurridos || 1;
+    diasRest = diasHabilesInfo.restantes || 0;
+  }
+
+  const calcTendencia = (factReal) => {
+    if (!esMesActual || !diasTr) return null;
+    return factReal + (factReal / diasTr) * diasRest;
+  };
+
   let html = `<table><thead><tr>
     <th style="min-width:220px">Vendedor / Proveedor</th>
     <th class="td-num">Ventas $</th>
+    <th class="td-num">Tendencia $</th>
     <th class="td-num">Objetivo $</th>
     <th>% Cumpl. Ventas $</th>
-    <th class="td-num">Cajas</th>
-    <th class="td-num">Objetivo cajas</th>
-    <th>% Cumpl. Cajas</th>
+    <th>% Tend. vs Obj.</th>
     <th class="td-num">Cartera</th>
     <th class="td-num">Con compra</th>
     <th class="td-num">Cob %</th>
@@ -2587,30 +2818,28 @@ function renderObjetivosMatriz() {
     const porProveedor = objetivosAvanceData[vendedor];
     const proveedores = Object.keys(porProveedor).sort();
 
-    // Totales del vendedor
-    let vFactReal=0, vFactObj=0, vCajasReal=0, vCajasObj=0, vCartera=0, vConCompra=0, vCoberturaObjProm=0, countCobObj=0;
+    let vFactReal=0, vFactObj=0, vCartera=0, vConCompra=0, vCoberturaObjProm=0, countCobObj=0;
     proveedores.forEach(p => {
       const m = porProveedor[p];
       vFactReal += m.facturacion_real; vFactObj += m.facturacion_objetivo;
-      vCajasReal += m.cajas_real; vCajasObj += m.cajas_objetivo;
-      vCartera = m.clientes_cartera; // mismo valor para todos los proveedores del vendedor
+      vCartera = m.clientes_cartera;
       vConCompra = Math.max(vConCompra, m.clientes_con_compra);
       if (m.cobertura_objetivo > 0) { vCoberturaObjProm += m.cobertura_objetivo; countCobObj++; }
     });
     const pctFactV = vFactObj > 0 ? (vFactReal/vFactObj*100) : 0;
-    const pctCajasV = vCajasObj > 0 ? (vCajasReal/vCajasObj*100) : 0;
     const coberturaRealV = vCartera > 0 ? (vConCompra/vCartera*100) : 0;
     const coberturaObjV = countCobObj > 0 ? vCoberturaObjProm/countCobObj : 0;
     const pctCobV = coberturaObjV > 0 ? (coberturaRealV/coberturaObjV*100) : 0;
+    const tendV = calcTendencia(vFactReal);
+    const pctTendV = (tendV !== null && vFactObj > 0) ? (tendV/vFactObj*100) : null;
 
     html += `<tr class="mtx-level-0">
       <td style="font-weight:800">${vendedor}</td>
       <td class="td-num">$${fmtMoney(vFactReal)}</td>
+      <td class="td-num">${tendV !== null ? '$'+fmtMoney(tendV) : '<span class="td-muted">—</span>'}</td>
       <td class="td-num">$${fmtMoney(vFactObj)}</td>
       <td>${barraProgreso(pctFactV)}</td>
-      <td class="td-num">${fmt(vCajasReal)}</td>
-      <td class="td-num">${fmt(vCajasObj)}</td>
-      <td>${barraProgreso(pctCajasV)}</td>
+      <td>${pctTendV !== null ? barraProgreso(pctTendV) : '<span class="td-muted">—</span>'}</td>
       <td class="td-num">${vCartera}</td>
       <td class="td-num">${vConCompra}</td>
       <td class="td-num">${coberturaRealV.toFixed(1)}%</td>
@@ -2621,17 +2850,17 @@ function renderObjetivosMatriz() {
     proveedores.forEach(p => {
       const m = porProveedor[p];
       const pctFact = m.facturacion_objetivo > 0 ? (m.facturacion_real/m.facturacion_objetivo*100) : 0;
-      const pctCajas = m.cajas_objetivo > 0 ? (m.cajas_real/m.cajas_objetivo*100) : 0;
       const pctCob = m.cobertura_objetivo > 0 ? (m.cobertura_real/m.cobertura_objetivo*100) : 0;
+      const tendP = calcTendencia(m.facturacion_real);
+      const pctTendP = (tendP !== null && m.facturacion_objetivo > 0) ? (tendP/m.facturacion_objetivo*100) : null;
 
       html += `<tr class="mtx-level-2">
         <td>${p}</td>
         <td class="td-num">$${fmtMoney(m.facturacion_real)}</td>
+        <td class="td-num">${tendP !== null ? '$'+fmtMoney(tendP) : '<span class="td-muted">—</span>'}</td>
         <td class="td-num">$${fmtMoney(m.facturacion_objetivo)}</td>
         <td>${m.facturacion_objetivo > 0 ? barraProgreso(pctFact) : '<span class="td-muted">Sin objetivo</span>'}</td>
-        <td class="td-num">${fmt(m.cajas_real)}</td>
-        <td class="td-num">${fmt(m.cajas_objetivo)}</td>
-        <td>${m.cajas_objetivo > 0 ? barraProgreso(pctCajas) : '<span class="td-muted">Sin objetivo</span>'}</td>
+        <td>${pctTendP !== null ? barraProgreso(pctTendP) : '<span class="td-muted">—</span>'}</td>
         <td class="td-num">${m.clientes_cartera}</td>
         <td class="td-num">${m.clientes_con_compra}</td>
         <td class="td-num">${m.cobertura_real.toFixed(1)}%</td>
