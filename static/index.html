@@ -24,7 +24,7 @@ header {
   padding: 12px 20px; border-bottom: 1px solid var(--border);
   background: var(--bg2); position: sticky; top: 0; z-index: 100;
 }
-.logo { display: flex; align-items: center; gap: 10px; }
+.logo { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
 .logo-icon {
   width: 36px; height: 36px; border-radius: 8px; background: #1ab8c4;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -404,13 +404,13 @@ canvas { max-height: 200px; }
 </div>
 
 <header>
-  <div class="logo">
+  <a class="logo" href="/" title="Volver al portal">
     <div class="logo-icon" style="background:transparent;padding:0"><img src="/static/kairon_logo.png" style="width:40px;height:40px;border-radius:8px;object-fit:cover" alt="Kairon"></div>
     <div class="logo-text">
       <span class="logo-name">Kairon</span>
       <span class="logo-sub">Distribuciones</span>
     </div>
-  </div>
+  </a>
   <div class="header-right">
     <span class="sync-info" id="sync-info">Cargando...</span>
     <button class="btn-refresh" onclick="refreshAll()">↺ Actualizar</button>

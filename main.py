@@ -1369,17 +1369,19 @@ NO_CACHE = {
     "Pragma": "no-cache"
 }
 
+# El portal es la home: se entra por aca y desde el menu se navega a cada
+# aplicativo. El dashboard vive en /dashboard, que es a donde apunta el
+# portal.
 @app.get("/")
 def root():
-    return FileResponse("static/index.html", headers=NO_CACHE)
+    return FileResponse("static/portal.html", headers=NO_CACHE)
 
-# Alias del dashboard. El portal enlaza todo a /dashboard, asi que la ruta
-# tiene que existir desde ahora. Cuando el portal pase a ser la home, "/"
-# devuelve portal.html y esta ruta queda como la unica del dashboard.
 @app.get("/dashboard")
 def dashboard():
     return FileResponse("static/index.html", headers=NO_CACHE)
 
+# Se mantiene /portal para que no se rompan los links y favoritos que
+# quedaron apuntando ahi mientras el portal se probaba.
 @app.get("/portal")
 def portal():
     return FileResponse("static/portal.html", headers=NO_CACHE)
