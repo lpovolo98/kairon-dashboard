@@ -40,6 +40,12 @@ header {
   white-space: nowrap;
 }
 .btn-refresh:hover { border-color: var(--accent); background: rgba(245,200,66,.08); }
+.btn-home {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--accent2);
+  font-family: var(--mono); font-size: 11px; padding: 6px 14px; border-radius: 6px; cursor: pointer; transition: all .15s;
+  white-space: nowrap; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-home:hover { border-color: var(--accent2); background: rgba(62,207,178,.08); }
 
 /* ── Nav ── */
 nav {
@@ -279,7 +285,7 @@ canvas { max-height: 200px; }
   header { padding: 10px 14px; }
   .logo-sub { display: none; }
   .sync-info { display: none; }
-  .btn-refresh { padding: 8px 12px; font-size: 12px; }
+  .btn-refresh, .btn-home { padding: 8px 12px; font-size: 12px; }
 
   /* Nav: scroll horizontal tipo pills */
   nav { padding: 0; gap: 0; }
@@ -413,6 +419,7 @@ canvas { max-height: 200px; }
   </a>
   <div class="header-right">
     <span class="sync-info" id="sync-info">Cargando...</span>
+    <a class="btn-home" href="/" title="Ir al portal">⌂ Portal</a>
     <button class="btn-refresh" onclick="refreshAll()">↺ Actualizar</button>
   </div>
 </header>
