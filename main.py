@@ -1364,16 +1364,22 @@ def reporte_vendedor_html(vendedor: str, mes: str = None):
 </body></html>"""
     return HTMLResponse(html)
 
+NO_CACHE = {
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache"
+}
+
 @app.get("/")
 def root():
-    return FileResponse("static/index.html", headers={
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-        "Pragma": "no-cache"
-    })
+    return FileResponse("static/index.html", headers=NO_CACHE)
+
+# Alias del dashboard. El portal enlaza todo a /dashboard, asi que la ruta
+# tiene que existir desde ahora. Cuando el portal pase a ser la home, "/"
+# devuelve portal.html y esta ruta queda como la unica del dashboard.
+@app.get("/dashboard")
+def dashboard():
+    return FileResponse("static/index.html", headers=NO_CACHE)
 
 @app.get("/portal")
 def portal():
-    return FileResponse("static/portal.html", headers={
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-        "Pragma": "no-cache"
-    })
+    return FileResponse("static/portal.html", headers=NO_CACHE)
