@@ -1370,3 +1370,10 @@ def root():
         "Cache-Control": "no-store, no-cache, must-revalidate",
         "Pragma": "no-cache"
     })
+
+@app.get("/portal")
+def portal():
+    return FileResponse("static/portal.html", headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache"
+    })

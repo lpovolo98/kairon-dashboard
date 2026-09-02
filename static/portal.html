@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kairon Distribuciones — Portal</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0b0d11; --bg2: #13161d; --bg3: #1a1e28; --border: #252a38;
+  --text: #e8eaf0; --muted: #5c6278;
+  --accent: #f5c842; --accent2: #3ecfb2; --accent3: #7b61ff;
+  --red: #ff4f4f;
+  --font: 'Poppins', sans-serif; --mono: 'DM Mono', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; }
+
+/* ── Header ── */
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; border-bottom: 1px solid var(--border);
+  background: var(--bg2); position: sticky; top: 0; z-index: 100;
+}
+.logo { display: flex; align-items: center; gap: 10px; }
+.logo-icon { width: 36px; height: 36px; flex-shrink: 0; }
+.logo-icon img { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; display: block; }
+.logo-text { display: flex; flex-direction: column; line-height: 1.1; }
+.logo-name { font-size: 15px; font-weight: 800; color: var(--text); letter-spacing: -.3px; }
+.logo-sub  { font-size: 10px; font-weight: 500; color: var(--accent2); letter-spacing: 1px; text-transform: uppercase; }
+.header-right { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.user-email {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── Nav ── */
+nav {
+  display: flex; gap: 0; padding: 0;
+  border-bottom: 1px solid var(--border); background: var(--bg2);
+  overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+nav::-webkit-scrollbar { display: none; }
+nav a {
+  font-family: var(--font); font-weight: 600; font-size: 13px;
+  padding: 12px 18px; cursor: pointer; text-decoration: none;
+  border-bottom: 3px solid transparent; color: var(--muted);
+  transition: all .15s; white-space: nowrap; flex-shrink: 0;
+  display: flex; align-items: center; gap: 7px;
+}
+nav a.active { border-bottom-color: var(--accent2); color: var(--text); }
+nav a:hover:not(.active) { color: var(--text); background: var(--bg3); }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.dot-portal    { background: var(--accent2); }
+.dot-stock     { background: var(--accent); }
+.dot-ventas    { background: var(--accent3); }
+.dot-clientes  { background: #1ab8c4; }
+.dot-cobranzas { background: var(--red); }
+.dot-objetivos { background: #ff9f43; }
+
+/* ── Main ── */
+main { max-width: 1080px; margin: 0 auto; padding: 40px 20px 80px; }
+.eyebrow { font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--accent2); }
+h1 { font-size: clamp(28px, 5vw, 42px); font-weight: 800; letter-spacing: -.02em; margin: 12px 0 10px; }
+h1 .name { color: var(--accent); }
+.sub { color: var(--muted); font-size: 14px; max-width: 62ch; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 36px; }
+.card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px 20px; text-decoration: none; color: inherit;
+  display: flex; flex-direction: column; gap: 6px; transition: all .15s;
+}
+.card:hover { border-color: var(--accent2); background: var(--bg3); transform: translateY(-2px); }
+.card-top { display: flex; align-items: center; gap: 9px; }
+.card-title { font-size: 15px; font-weight: 700; letter-spacing: -.2px; }
+.card-desc { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.card-go { font-family: var(--mono); font-size: 11px; color: var(--accent2); margin-top: 6px; }
+
+.footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+@media (max-width: 640px) {
+  main { padding: 28px 16px 60px; }
+  nav a { padding: 12px 14px; font-size: 12.5px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon"><img src="/static/kairon_logo.png" alt="Kairon"></div>
+    <div class="logo-text">
+      <span class="logo-name">Kairon</span>
+      <span class="logo-sub">Distribuciones</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="user-email" id="user-email"></span>
+  </div>
+</header>
+
+<nav>
+  <a class="active" href="/portal"><span class="dot dot-portal"></span>Portal</a>
+  <a href="/"><span class="dot dot-stock"></span>Stock</a>
+  <a href="/"><span class="dot dot-ventas"></span>Ventas</a>
+  <a href="/"><span class="dot dot-clientes"></span>Clientes</a>
+  <a href="/"><span class="dot dot-cobranzas"></span>Cobranzas</a>
+  <a href="/"><span class="dot dot-objetivos"></span>Objetivos</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Portal interno</div>
+  <h1>Bienvenido<span id="greet-name"></span></h1>
+  <p class="sub">Accesos a las herramientas de Kairon Distribuciones. Los datos se sincronizan con Odoo y se refrescan desde el dashboard.</p>
+
+  <div class="cards">
+    <a class="card" href="/">
+      <div class="card-top"><span class="dot dot-stock"></span><span class="card-title">Stock</span></div>
+      <div class="card-desc">Existencias por producto, proveedor y categoría, con días de cobertura.</div>
+      <div class="card-go">Abrir →</div>
+    </a>
+    <a class="card" href="/">
+      <div class="card-top"><span class="dot dot-ventas"></span><span class="card-title">Ventas</span></div>
+      <div class="card-desc">Facturación y cajas del período, con apertura por vendedor y proveedor.</div>
+      <div class="card-go">Abrir →</div>
+    </a>
+    <a class="card" href="/">
+      <div class="card-top"><span class="dot dot-clientes"></span><span class="card-title">Clientes</span></div>
+      <div class="card-desc">Cartera, cobertura y detalle de compras por cliente.</div>
+      <div class="card-go">Abrir →</div>
+    </a>
+    <a class="card" href="/">
+      <div class="card-top"><span class="dot dot-cobranzas"></span><span class="card-title">Cobranzas</span></div>
+      <div class="card-desc">Saldos pendientes y vencimientos por cliente.</div>
+      <div class="card-go">Abrir →</div>
+    </a>
+    <a class="card" href="/">
+      <div class="card-top"><span class="dot dot-objetivos"></span><span class="card-title">Objetivos</span></div>
+      <div class="card-desc">Avance de objetivos mensuales de venta, cajas y cobertura.</div>
+      <div class="card-go">Abrir →</div>
+    </a>
+    <a class="card" href="/docs">
+      <div class="card-top"><span class="dot dot-portal"></span><span class="card-title">API</span></div>
+      <div class="card-desc">Documentación de los endpoints del backend.</div>
+      <div class="card-go">Abrir →</div>
+    </a>
+  </div>
+
+  <div class="footer">Kairon Distribuciones · Portal interno</div>
+</main>
+
+<script>
+// Identidad de Cloudflare Access. En local el endpoint no existe:
+// la llamada falla y el saludo queda en "Bienvenido" a secas, sin ruido.
+(async function loadIdentity() {
+  try {
+    const res = await fetch('/cdn-cgi/access/get-identity', { credentials: 'include' });
+    if (!res.ok) return;
+    const id = await res.json();
+    const email = id.email || '';
+    const nombre = (id.name || '').trim() || (email ? email.split('@')[0] : '');
+    if (email) document.getElementById('user-email').textContent = email;
+    if (nombre) document.getElementById('greet-name').innerHTML = ', <span class="name"></span>';
+    if (nombre) document.querySelector('#greet-name .name').textContent = nombre;
+  } catch (e) {
+    /* sin Access (local): se ignora a propósito */
+  }
+})();
+</script>
+
+</body>
+</html>
