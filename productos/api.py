@@ -25,9 +25,22 @@ RAIZ = Path(__file__).resolve().parents[1]
 TOPE_REGISTROS = int(os.getenv("PRODUCTOS_TOPE", "300"))
 
 
+def ruta_datos():
+    """Dónde vive el historial de corridas. En Railway hay un volumen montado
+    en /data, así que el default ya es persistente y no hace falta configurar
+    nada. Sin volumen cae al repo, que se pierde en cada deploy."""
+    return Path(os.getenv("PRODUCTOS_DATA_DIR",
+                          "/data/productos" if Path("/data").is_dir() else str(RAIZ / "productos-data")))
+
+
+def persistente():
+    """True si el historial sobrevive a un reinicio. Si es False, una corrida
+    aplicada deja de poder revertirse cuando el contenedor se recicla."""
+    return os.path.ismount("/data") and str(ruta_datos()).startswith("/data")
+
+
 def directorio():
-    p = Path(os.getenv("PRODUCTOS_DATA_DIR",
-                       "/data/productos" if Path("/data").is_dir() else str(RAIZ / "productos-data")))
+    p = ruta_datos()
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -86,7 +99,10 @@ def status(owner=Depends(autorizar)):
     faltan = [k for k in ("ODOO_URL", "ODOO_DB", "ODOO_USER") if not os.getenv(k)]
     if not (os.getenv("ODOO_KEY") or os.getenv("ODOO_PASSWORD")):
         faltan.append("ODOO_PASSWORD")
-    return {"ready": not faltan, "missing": faltan, "tope": TOPE_REGISTROS}
+    return {"ready": not faltan, "missing": faltan, "tope": TOPE_REGISTROS,
+            # Para poder verificar desde la pantalla que revertir va a seguir
+            # siendo posible después de un reinicio.
+            "datos": str(ruta_datos()), "persistente": persistente()}
 
 
 def _catalogo(o):

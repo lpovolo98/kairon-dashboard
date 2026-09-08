@@ -42,7 +42,13 @@ async function iniciar() {
   try {
     const st = await pedir('/api/productos/status');
     const box = $('#conexion');
-    if (st.ready) {
+    if (st.ready && st.persistente === false) {
+      // Sin volumen persistente el historial se pierde al reiniciar, y con él
+      // la posibilidad de revertir lo que ya se aplicó.
+      box.className = 'status';
+      box.innerHTML = 'Conectado a Odoo, pero el historial de corridas <b>no es persistente</b> '
+        + `(<code>${esc(st.datos)}</code>): si el servidor se reinicia, lo aplicado no se va a poder revertir.`;
+    } else if (st.ready) {
       box.className = 'status online';
       box.textContent = 'Conectado a Odoo · las altas y modificaciones se previsualizan antes de escribir';
     } else {

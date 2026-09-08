@@ -184,3 +184,45 @@ class ModificacionMasiva(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class Persistencia(unittest.TestCase):
+    """El historial de corridas es lo que hace posible revertir. Si vive en un
+    directorio efímero, una corrida aplicada deja de poder deshacerse en cuanto
+    el contenedor se recicla."""
+
+    def test_por_defecto_usa_el_volumen_si_existe(self):
+        import os
+        from unittest.mock import patch
+        from pathlib import Path
+        from productos import api
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PRODUCTOS_DATA_DIR", None)
+            with patch.object(Path, "is_dir", return_value=True):
+                self.assertEqual(str(api.ruta_datos()), "/data/productos")
+
+    def test_sin_volumen_cae_al_repo_y_lo_reporta_como_no_persistente(self):
+        import os
+        from unittest.mock import patch
+        from productos import api
+        with patch.dict(os.environ, {"PRODUCTOS_DATA_DIR": "/tmp/efimero"}), \
+             patch.object(os.path, "ismount", return_value=False):
+            self.assertFalse(api.persistente())
+
+    def test_una_ruta_fuera_del_volumen_no_cuenta_como_persistente(self):
+        """Aunque /data esté montado: si la variable apunta a otro lado, el
+        historial no está en el volumen."""
+        import os
+        from unittest.mock import patch
+        from productos import api
+        with patch.dict(os.environ, {"PRODUCTOS_DATA_DIR": "/app/productos-data"}), \
+             patch.object(os.path, "ismount", return_value=True):
+            self.assertFalse(api.persistente())
+
+    def test_con_volumen_y_ruta_correcta_es_persistente(self):
+        import os
+        from unittest.mock import patch
+        from productos import api
+        with patch.dict(os.environ, {"PRODUCTOS_DATA_DIR": "/data/productos"}), \
+             patch.object(os.path, "ismount", return_value=True):
+            self.assertTrue(api.persistente())
