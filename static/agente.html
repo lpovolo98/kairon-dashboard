@@ -160,6 +160,7 @@ textarea { width:100%; min-height:78px; resize:vertical; line-height:1.5; }
         <option value="teldudoso">Teléfono a revisar</option>
         <option value="singeo">Sin ubicación en el mapa</option>
         <option value="sindia">Sin día de visita</option>
+        <option value="sincontacto">Sin persona de contacto</option>
       </select>
       <select id="fOrden">
         <option value="monto">Ordenar por facturación 365d</option>
@@ -190,7 +191,9 @@ textarea { width:100%; min-height:78px; resize:vertical; line-height:1.5; }
       El archivo trae un renglón por cliente marcado, agrupado por día de visita, con un botón que abre
       la conversación de WhatsApp con el mensaje ya escrito. Podés ir tildando a medida que contactás.
       Variables disponibles en el mensaje:
-      <span class="mono">{nombre}</span>, <span class="mono">{primer_nombre}</span>, <span class="mono">{dia}</span>.
+      <span class="mono">{contacto}</span> (la persona de contacto; si el cliente no la tiene cargada
+      usa el nombre del comercio), <span class="mono">{primer_nombre_contacto}</span>,
+      <span class="mono">{nombre}</span> (razón social) y <span class="mono">{dia}</span>.
     </p>
     <textarea id="mensaje" placeholder="Mensaje inicial…"></textarea>
     <div class="acciones" style="margin-top:12px">
@@ -201,9 +204,9 @@ textarea { width:100%; min-height:78px; resize:vertical; line-height:1.5; }
     </div>
   </section>
 
-  <section class="panel">
-    <h2>Clientes a los que les falta el teléfono</h2>
-    <p class="ayuda">Estos están marcados para la campaña pero no tienen celular ni teléfono en Odoo: hay que completarlos allá para que entren.</p>
+  <section class="panel oculto" id="panelFaltantes">
+    <h2>Datos para completar en Odoo</h2>
+    <p class="ayuda">Clientes marcados para la campaña a los que les falta algún dato. Este panel desaparece solo cuando la base está al día.</p>
     <div id="faltantes" class="valores">—</div>
   </section>
 
@@ -239,6 +242,7 @@ async function cargarCampos() {
 function pintarCampos(d) {
   const cont = $('#campos');
   const elegido = (d.config || {}).campo_dia_visita || '';
+  const contacto = ((d.config || {}).campo_contacto || '') || d.campo_contacto_detectado || '';
   cont.className = '';
   if (!d.candidatos.length) {
     cont.innerHTML = '<div class="aviso warn">No encontré ningún campo que suene a día de visita entre los '
@@ -251,7 +255,9 @@ function pintarCampos(d) {
       : '<i>sin valores cargados</i>';
     return '<tr class="' + (c.name === elegido ? 'sel' : '') + '">'
       + '<td><button class="btn ' + (c.name === elegido ? 'pri' : '') + '" data-campo="' + esc(c.name) + '">'
-      + (c.name === elegido ? 'En uso' : 'Usar este') + '</button></td>'
+      + (c.name === elegido ? 'Día en uso' : 'Usar como día') + '</button>'
+      + '<button class="btn ' + (c.name === contacto ? 'pri' : '') + '" style="margin-top:6px" data-contacto="'
+      + esc(c.name) + '">' + (c.name === contacto ? 'Contacto en uso' : 'Usar como contacto') + '</button></td>'
       + '<td><div>' + esc(c.string) + '</div><div class="mono">' + esc(c.name) + '</div></td>'
       + '<td class="valores">' + esc(c.type) + '</td>'
       + '<td class="valores">' + vals + '</td></tr>';
@@ -274,17 +280,19 @@ function pintarCampos(d) {
     + '<th>Valores cargados hoy</th></tr></thead><tbody>' + filas + extra + '</tbody></table>';
 
   cont.querySelectorAll('button[data-campo]').forEach(b => {
-    b.addEventListener('click', () => elegirCampo(b.dataset.campo));
+    b.addEventListener('click', () => guardarCampo({campo_dia_visita: b.dataset.campo}));
   });
-  $('#campoActual').innerHTML = elegido
-    ? 'Campo en uso: <span class="mono">' + esc(elegido) + '</span>'
-    : 'Todavía no elegiste ningún campo.';
+  cont.querySelectorAll('button[data-contacto]').forEach(b => {
+    b.addEventListener('click', () => guardarCampo({campo_contacto: b.dataset.contacto}));
+  });
+  $('#campoActual').innerHTML = 'Día de visita: <span class="mono">' + esc(elegido || '—')
+    + '</span> · Persona de contacto: <span class="mono">' + esc(contacto || '—') + '</span>';
 }
 
-async function elegirCampo(campo) {
+async function guardarCampo(cambio) {
   await fetch('/api/agente/config', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({campo_dia_visita: campo}),
+    body: JSON.stringify(cambio),
   });
   await cargarCampos();
   await cargarClientes(true);
@@ -305,16 +313,19 @@ async function cargarClientes(force) {
 
 function pintarKpis() {
   const r = DATOS.resumen;
+  // Los KPIs de datos faltantes solo se muestran mientras haya algo que
+  // completar: cuando la base de Odoo esté al día desaparecen solos.
   const k = [
-    ['Clientes', r.total, ''],
-    ['Marcados WhatsApp', SEL.size, 'ok'],
-    ['Con teléfono', r.con_telefono, ''],
-    ['Sin teléfono', r.sin_telefono, r.sin_telefono ? 'alerta' : ''],
-    ['Teléfono a revisar', r.telefono_dudoso, r.telefono_dudoso ? 'alerta' : ''],
-    ['Sin ubicación', r.sin_geo, r.sin_geo ? 'alerta' : ''],
-    ['Sin día de visita', r.sin_dia, r.sin_dia ? 'alerta' : ''],
+    ['Clientes', r.total, '', true],
+    ['Marcados WhatsApp', SEL.size, 'ok', true],
+    ['Con teléfono', r.con_telefono, '', true],
+    ['Sin teléfono', r.sin_telefono, 'alerta', r.sin_telefono > 0],
+    ['Teléfono a revisar', r.telefono_dudoso, 'alerta', r.telefono_dudoso > 0],
+    ['Sin persona de contacto', r.sin_contacto, 'alerta', r.sin_contacto > 0],
+    ['Sin ubicación', r.sin_geo, 'alerta', r.sin_geo > 0],
+    ['Sin día de visita', r.sin_dia, 'alerta', r.sin_dia > 0],
   ];
-  $('#kpis').innerHTML = k.map(([t, v, cls]) =>
+  $('#kpis').innerHTML = k.filter(x => x[3]).map(([t, v, cls]) =>
     '<div class="kpi ' + cls + '"><b>' + plata(v) + '</b><span>' + t + '</span></div>').join('');
 
   if (!DATOS.campo_configurado) {
@@ -324,7 +335,12 @@ function pintarKpis() {
     $('#campoEstado').className = 'aviso info';
     $('#campoEstado').innerHTML = 'Agrupando por <span class="mono">' + esc(DATOS.campo_dia_visita)
       + '</span>' + (DATOS.campo_etiqueta ? ' (' + esc(DATOS.campo_etiqueta) + ')' : '')
-      + ' · ' + DATOS.dias.length + ' días distintos.';
+      + ' · ' + DATOS.dias.length + ' días distintos.<br>'
+      + (DATOS.campo_contacto
+          ? 'Persona de contacto desde <span class="mono">' + esc(DATOS.campo_contacto) + '</span>'
+            + (DATOS.campo_contacto_etiqueta ? ' (' + esc(DATOS.campo_contacto_etiqueta) + ')' : '') + '.'
+          : '<b>No encontré el campo “Persona de contacto”</b>: los mensajes van a salir con el nombre del comercio. '
+            + 'Abrí <b>Ver / cambiar el campo</b> y elegilo con <i>Usar como contacto</i>.');
   }
 }
 
@@ -363,13 +379,15 @@ function visibles() {
       const okDia = c.dias_visita.some(d => DIAS_ON.has(d)) || (!c.dias_visita.length && DIAS_ON.has('__sin'));
       if (!okDia) return false;
     }
-    if (q && !(c.nombre + ' ' + c.ciudad + ' ' + c.telefono_crudo + ' ' + c.direccion).toLowerCase().includes(q)) return false;
+    if (q && !(c.nombre + ' ' + c.contacto + ' ' + c.ciudad + ' ' + c.telefono_crudo + ' ' + c.direccion)
+              .toLowerCase().includes(q)) return false;
     if (est === 'sel' && !SEL.has(c.id)) return false;
     if (est === 'nosel' && SEL.has(c.id)) return false;
     if (est === 'sintel' && c.telefono) return false;
     if (est === 'teldudoso' && !(c.telefono && !c.telefono_ok)) return false;
     if (est === 'singeo' && c.lat && c.lon) return false;
     if (est === 'sindia' && c.dias_visita.length) return false;
+    if (est === 'sincontacto' && c.contacto) return false;
     return true;
   });
   const orden = $('#fOrden').value;
@@ -393,7 +411,8 @@ function render() {
   });
   pintarMapa(lista);
   pintarFaltantes();
-  $('#kpis').children[1].querySelector('b').textContent = plata(SEL.size);
+  const kpiSel = [...$('#kpis').children].find(el => el.querySelector('span').textContent === 'Marcados WhatsApp');
+  if (kpiSel) kpiSel.querySelector('b').textContent = plata(SEL.size);
 }
 
 function fila(c) {
@@ -404,6 +423,9 @@ function fila(c) {
     ? '<span class="tag' + (c.telefono_ok ? '' : ' falta') + '">' + esc(c.telefono_crudo) + (c.telefono_ok ? '' : ' · revisar') + '</span>'
     : '<span class="tag falta">sin teléfono</span>';
   const geo = (c.lat && c.lon) ? '' : '<span class="tag geo">sin ubicación</span>';
+  const cto = c.contacto
+    ? '<span class="tag" style="border-color:var(--accent2);color:var(--accent2)">' + esc(c.contacto) + '</span>'
+    : '<span class="tag falta">sin persona de contacto</span>';
   const compra = c.ultima_compra
     ? 'últ. compra ' + c.ultima_compra + ' · ' + c.dias_sin_comprar + ' días'
     : 'sin compras en 365 días';
@@ -412,7 +434,7 @@ function fila(c) {
   return '<div class="fila ' + (SEL.has(c.id) ? 'marcada' : '') + '" data-id="' + c.id + '">'
     + '<input type="checkbox" ' + (SEL.has(c.id) ? 'checked' : '') + '>'
     + '<div class="info"><div class="nom">' + esc(c.nombre) + '</div>'
-    + '<div class="meta">' + dias + tel + geo + wa + '</div>'
+    + '<div class="meta">' + cto + dias + tel + geo + wa + '</div>'
     + '<div class="meta"><span>' + esc(c.ciudad || c.direccion || 'sin dirección') + '</span>'
     + '<span>$' + plata(c.monto_365d) + ' · ' + compra + '</span></div></div></div>';
 }
@@ -457,6 +479,7 @@ function pintarMapa(lista) {
       fillColor: color, fillOpacity: marcado ? .95 : .55,
     });
     m.bindPopup('<b>' + esc(c.nombre) + '</b>'
+      + (c.contacto ? esc(c.contacto) + '<br>' : '')
       + (c.dias_visita.length ? c.dias_visita.join(' / ') + '<br>' : 'Sin día de visita<br>')
       + (c.telefono_crudo ? esc(c.telefono_crudo) : '<span style="color:#ff8c42">Sin teléfono</span>') + '<br>'
       + esc(c.direccion || '') + '<br>'
@@ -475,13 +498,18 @@ function pintarMapa(lista) {
 
 // ── Paso 3 ────────────────────────────────────────────────
 function pintarFaltantes() {
-  const f = DATOS.clientes.filter(c => SEL.has(c.id) && !c.telefono);
-  $('#faltantes').innerHTML = f.length
-    ? f.map(c => '<b>' + esc(c.nombre) + '</b>').join(' · ')
-      + '<br><br>' + f.length + ' de ' + SEL.size + ' marcados no van a poder recibir el mensaje.'
-    : 'Todos los clientes marcados tienen teléfono cargado. ✔';
+  const sinTel = DATOS.clientes.filter(c => SEL.has(c.id) && !c.telefono);
+  const sinCto = DATOS.clientes.filter(c => SEL.has(c.id) && !c.contacto);
+  const bloques = [];
+  if (sinTel.length) bloques.push('<b style="color:var(--orange)">Sin teléfono (' + sinTel.length
+    + ') — no van a poder recibir el mensaje:</b><br>' + sinTel.map(c => esc(c.nombre)).join(' · '));
+  if (sinCto.length) bloques.push('<b style="color:var(--orange)">Sin persona de contacto (' + sinCto.length
+    + ') — el mensaje les va a salir con el nombre del comercio:</b><br>' + sinCto.map(c => esc(c.nombre)).join(' · '));
+  $('#panelFaltantes').classList.toggle('oculto', bloques.length === 0);
+  $('#faltantes').innerHTML = bloques.join('<br><br>');
   $('#resumenExport').textContent = SEL.size
-    ? (SEL.size - f.length) + ' clientes exportables · ' + f.length + ' sin teléfono'
+    ? (SEL.size - sinTel.length) + ' clientes exportables'
+      + (sinTel.length ? ' · ' + sinTel.length + ' sin teléfono' : '')
     : 'Todavía no marcaste clientes.';
 }
 

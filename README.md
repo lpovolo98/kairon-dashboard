@@ -30,7 +30,17 @@ deja los links listos para escribir uno por uno.
    pueden geolocalizar por dirección contra OpenStreetMap (botón *Geolocalizar faltantes*).
 3. **Exportar.** Genera un HTML (o CSV) con un renglón por cliente marcado, agrupado por día,
    con el botón que abre WhatsApp con el mensaje ya escrito. Variables del mensaje:
-   `{nombre}`, `{primer_nombre}`, `{dia}`.
+   `{contacto}`, `{primer_nombre_contacto}`, `{nombre}` (razón social), `{dia}`.
+
+La **persona de contacto** (el dueño o encargado, no la razón social) sale de un campo custom de
+`res.partner`. Como los campos de Studio tienen nombre técnico ilegible, se detecta solo buscando
+el campo cuya etiqueta es "Persona de contacto"; se puede fijar con la variable de entorno
+`CAMPO_CONTACTO` o elegir a mano desde el paso 1. Si un cliente no la tiene cargada, `{contacto}`
+cae en el nombre del comercio para que el mensaje nunca salga con un hueco.
+
+Los KPIs y el panel de datos faltantes (sin teléfono, sin persona de contacto, sin ubicación,
+sin día) **solo aparecen mientras haya algo que completar**: cuando la base de Odoo esté al día
+desaparecen solos.
 
 Los teléfonos se normalizan a formato WhatsApp argentino (`549` + área + número, sacando
 el `0` de larga distancia y el `15`); los que quedan con largo raro se marcan *a revisar*

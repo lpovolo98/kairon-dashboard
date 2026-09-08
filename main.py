@@ -1278,7 +1278,7 @@ AGENTE_PATH = os.path.join(_DATA_DIR, "agente_config.json")
 _agente_lock = threading.Lock()
 
 MENSAJE_DEFAULT = (
-    "Hola {nombre}! Te escribo de Kairon. "
+    "Hola {contacto}! Te escribo de Kairon. "
     "Te paso el catálogo actualizado por si querés armar el pedido de esta semana. "
     "¿Te tomo algo?"
 )
@@ -1289,8 +1289,15 @@ MENSAJE_DEFAULT = (
 CAMPO_DIA_VISITA_DEFAULT = os.getenv(
     "CAMPO_DIA_VISITA", "x_studio_many2many_field_4bq_1j6ma1s65")
 
+# Campo de res.partner con el nombre de la persona con la que se habla (el
+# dueño del comercio o el encargado), que no es la razón social del cliente.
+# Vacío = se detecta solo buscando el campo cuya etiqueta es "Persona de
+# contacto"; se puede fijar con la variable de entorno CAMPO_CONTACTO.
+CAMPO_CONTACTO_DEFAULT = os.getenv("CAMPO_CONTACTO", "")
+
 AGENTE_CONFIG_DEFAULT = {
     "campo_dia_visita": CAMPO_DIA_VISITA_DEFAULT,
+    "campo_contacto": CAMPO_CONTACTO_DEFAULT,
     "mensaje": MENSAJE_DEFAULT,
     "seleccionados": [],   # ids de res.partner marcados para contactar
     "geo": {},             # {"<partner_id>": [lat, lon]} geocodificados acá
@@ -1365,6 +1372,25 @@ def _primer_telefono(p):
 
 
 # ─── Descubrimiento del campo "día de visita" ────────────────
+_RX_CONTACTO = re.compile(r"persona\s*de\s*contacto|contact[oa]\b|encargad|due[nñ]", re.IGNORECASE)
+_TIPOS_TEXTO = ("char", "text", "many2one")
+
+
+def _detectar_campo_contacto(campos_meta):
+    """Los campos de Studio tienen nombre técnico ilegible, así que la persona
+    de contacto se busca por etiqueta: primero la exacta, después parecidas."""
+    candidatos = [(n, (m.get("string") or "").strip().lower())
+                  for n, m in campos_meta.items()
+                  if m.get("type") in _TIPOS_TEXTO and n not in ("name", "display_name")]
+    for n, etiqueta in candidatos:
+        if etiqueta == "persona de contacto":
+            return n
+    for n, etiqueta in candidatos:
+        if n.startswith("x_") and _RX_CONTACTO.search(etiqueta):
+            return n
+    return ""
+
+
 _RX_DIA_VISITA = re.compile(
     r"visit|d[ií]a|day|ruta|route|reparto|frecuen|jornada|zona|recorrid|preventa",
     re.IGNORECASE,
@@ -1395,7 +1421,9 @@ def get_agente_campos():
             continue
         etiqueta = meta.get("string") or name
         es_custom = name.startswith("x_")
-        if not (es_custom or _RX_DIA_VISITA.search(name) or _RX_DIA_VISITA.search(etiqueta)):
+        suena = (_RX_DIA_VISITA.search(name) or _RX_DIA_VISITA.search(etiqueta)
+                 or _RX_CONTACTO.search(etiqueta))
+        if not (es_custom or suena):
             continue
         candidatos.append({
             "name": name,
@@ -1449,11 +1477,13 @@ def get_agente_campos():
         "etiquetas": etiquetas,
         "config": cargar_agente_config(),
         "total_campos": len(campos),
+        "campo_contacto_detectado": _detectar_campo_contacto(campos),
     }
 
 
 class AgenteConfigBody(BaseModel):
     campo_dia_visita: str = None
+    campo_contacto: str = None
     mensaje: str = None
 
 
@@ -1462,6 +1492,8 @@ def post_agente_config(body: AgenteConfigBody):
     cfg = cargar_agente_config()
     if body.campo_dia_visita is not None:
         cfg["campo_dia_visita"] = body.campo_dia_visita.strip()
+    if body.campo_contacto is not None:
+        cfg["campo_contacto"] = body.campo_contacto.strip()
     if body.mensaje is not None:
         cfg["mensaje"] = body.mensaje
     guardar_agente_config(cfg)
@@ -1524,6 +1556,13 @@ def build_agente_clientes(uid, models):
     campo_ok = bool(campo) and campo in campos_meta
     if campo_ok and campo not in pedir:
         pedir.append(campo)
+
+    # Persona de contacto: la configurada, o la que se detecte por etiqueta.
+    campo_cto = (cfg.get("campo_contacto") or "").strip()
+    if not campo_cto or campo_cto not in campos_meta:
+        campo_cto = _detectar_campo_contacto(campos_meta)
+    if campo_cto and campo_cto not in pedir:
+        pedir.append(campo_cto)
 
     partners = odoo_call(
         models, uid, "res.partner", "search_read",
@@ -1594,6 +1633,11 @@ def build_agente_clientes(uid, models):
         dias = sorted(_dias_de_valor(p.get(campo) if campo_ok else None, nombres_rel), key=_orden_dia)
         tel = _primer_telefono(p)
 
+        contacto = p.get(campo_cto) if campo_cto else None
+        if isinstance(contacto, (list, tuple)):
+            contacto = contacto[1] if len(contacto) == 2 else ""
+        contacto = (contacto or "").strip() if isinstance(contacto, str) else ""
+
         lat = p.get("partner_latitude") or 0
         lon = p.get("partner_longitude") or 0
         origen_geo = "odoo"
@@ -1618,6 +1662,7 @@ def build_agente_clientes(uid, models):
         out.append({
             "id": pid,
             "nombre": p.get("name") or "",
+            "contacto": contacto,
             "dias_visita": dias,
             "telefono": tel["e164"],
             "telefono_crudo": tel["crudo"],
@@ -1647,6 +1692,8 @@ def build_agente_clientes(uid, models):
         "campo_configurado": campo_ok,
         "campo_dia_visita": campo if campo_ok else "",
         "campo_etiqueta": (campos_meta.get(campo, {}) or {}).get("string", "") if campo_ok else "",
+        "campo_contacto": campo_cto,
+        "campo_contacto_etiqueta": (campos_meta.get(campo_cto, {}) or {}).get("string", "") if campo_cto else "",
         "resumen": {
             "total": len(out),
             "con_telefono": sum(1 for c in out if c["telefono"]),
@@ -1654,6 +1701,7 @@ def build_agente_clientes(uid, models):
             "telefono_dudoso": sum(1 for c in out if c["telefono"] and not c["telefono_ok"]),
             "sin_geo": sum(1 for c in out if not c["lat"] or not c["lon"]),
             "sin_dia": sum(1 for c in out if not c["dias_visita"]),
+            "sin_contacto": sum(1 for c in out if not c["contacto"]),
             "seleccionados": sum(1 for c in out if c["seleccionado"]),
         },
     }
@@ -1720,8 +1768,14 @@ def post_agente_geocodificar(limite: int = 20):
 
 
 # ─── Exportable con hipervínculos de WhatsApp ────────────────
-def _link_whatsapp(tel, nombre, dias, mensaje):
+def _link_whatsapp(tel, nombre, dias, mensaje, contacto=""):
+    """{contacto} es la persona con la que se habla (dueño o encargado). Si el
+    cliente no la tiene cargada, cae en el nombre del comercio para que el
+    mensaje nunca salga con un hueco."""
     texto = (mensaje or MENSAJE_DEFAULT)
+    quien = (contacto or "").strip() or (nombre or "")
+    texto = texto.replace("{contacto}", quien)
+    texto = texto.replace("{primer_nombre_contacto}", quien.split(" ")[0])
     texto = texto.replace("{nombre}", nombre or "")
     texto = texto.replace("{nombre_completo}", nombre or "")
     texto = texto.replace("{primer_nombre}", (nombre or "").split(" ")[0])
@@ -1754,10 +1808,10 @@ def get_agente_export(formato: str = "html", dias: str = None):
 
     if formato == "csv":
         # Separador ";": es lo que espera Excel en configuración regional es-AR.
-        filas = ["Cliente;Dia de visita;Telefono;Ultima compra;Link WhatsApp"]
+        filas = ["Cliente;Persona de contacto;Dia de visita;Telefono;Ultima compra;Link WhatsApp"]
         for c in sel:
-            link = _link_whatsapp(c["telefono"], c["nombre"], c["dias_visita"], mensaje) if c["telefono"] else "SIN TELEFONO"
-            campos = [c["nombre"], " / ".join(c["dias_visita"]), c["telefono_crudo"],
+            link = _link_whatsapp(c["telefono"], c["nombre"], c["dias_visita"], mensaje, c.get("contacto")) if c["telefono"] else "SIN TELEFONO"
+            campos = [c["nombre"], c.get("contacto") or "", " / ".join(c["dias_visita"]), c["telefono_crudo"],
                       c["ultima_compra"] or "", link]
             filas.append(";".join('"' + str(x).replace('"', '""') + '"' for x in campos))
         cuerpo = "﻿" + "\n".join(filas)
@@ -1779,7 +1833,7 @@ def get_agente_export(formato: str = "html", dias: str = None):
         filas = []
         for c in por_dia[dia]:
             if c["telefono"]:
-                link = _link_whatsapp(c["telefono"], c["nombre"], c["dias_visita"], mensaje)
+                link = _link_whatsapp(c["telefono"], c["nombre"], c["dias_visita"], mensaje, c.get("contacto"))
                 accion = f'<a class="wa" href="{esc(link)}" target="_blank" rel="noopener">Abrir WhatsApp</a>'
                 tel = esc(c["telefono_crudo"])
             else:
@@ -1787,13 +1841,14 @@ def get_agente_export(formato: str = "html", dias: str = None):
                 tel = "—"
             filas.append(
                 f'<tr><td><input type="checkbox" class="chk"></td><td>{esc(c["nombre"])}</td>'
+                f'<td>{esc(c.get("contacto") or "—")}</td>'
                 f'<td class="mono">{tel}</td><td class="mono">{esc(c["ultima_compra"] or "—")}</td>'
                 f'<td>{accion}</td></tr>'
             )
         bloques.append(
             f'<h2>{esc(dia)} <small>{len(por_dia[dia])} clientes</small></h2>'
-            '<table><thead><tr><th></th><th>Cliente</th><th>Teléfono</th>'
-            '<th>Última compra</th><th>Contacto</th></tr></thead><tbody>'
+            '<table><thead><tr><th></th><th>Cliente</th><th>Persona de contacto</th>'
+            '<th>Teléfono</th><th>Última compra</th><th>WhatsApp</th></tr></thead><tbody>'
             + "".join(filas) + "</tbody></table>"
         )
 
