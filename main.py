@@ -1323,6 +1323,14 @@ def build_mapa_data(uid, models, meses_n=12):
         {"fields": fields, "limit": 20000}
     )
 
+    # Cartera = los que tienen relación comercial en Odoo (alguna venta
+    # alguna vez), que es el mismo criterio que ya usa el resto del
+    # dashboard. El maestro de QuadMinds no sirve para esto: sus columnas
+    # de visita (dispositivo, día, última visita) vienen vacías.
+    cartera_ids = set(models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "res.partner", "search",
+        [[["sale_order_ids", "!=", False]]], {"limit": 50000}))
+
     # Índices para el cruce: por código y, como red, por nombre normalizado.
     por_cod, por_nom = {}, {}
     for p in partners:
@@ -1398,12 +1406,13 @@ def build_mapa_data(uid, models, meses_n=12):
         item = {
             "cod": g["cod"], "nom": g["nom"], "dir": g["dir"],
             "canal": g["canal"], "lat": g["lat"], "lon": g["lon"],
-            "zonas": g["zonas"], "odoo_id": None, "vendedor": None,
-            "exhibidor": False, "meses": {},
+            "zona": g["zona"], "odoo_id": None, "vendedor": None,
+            "cartera": False, "exhibidor": False, "meses": {},
         }
         if p:
             matcheados += 1
             item["odoo_id"] = p["id"]
+            item["cartera"] = p["id"] in cartera_ids
             item["vendedor"] = p["user_id"][1] if p.get("user_id") else None
             # Si Odoo tiene coordenadas propias cargadas, mandan esas.
             la, lo = p.get("partner_latitude"), p.get("partner_longitude")
@@ -1430,6 +1439,7 @@ def build_mapa_data(uid, models, meses_n=12):
             "odoo_partners": len(partners),
             "matcheados": matcheados,
             "sin_match": len(geo) - matcheados,
+            "en_cartera": sum(1 for c in salida if c["cartera"]),
             "campos_codigo_detectados": campos_cod,
             "coords_odoo_disponibles": bool(campos_geo),
             "exhibidor_codes": sorted(EXHIBIDOR_CODES),

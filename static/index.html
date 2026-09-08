@@ -783,11 +783,17 @@ canvas { max-height: 200px; }
       <input id="mp-umbral" type="number" min="0" step="1000" placeholder="0" oninput="pintarMapa()">
     </div>
     <div class="mt">
+      <label>&nbsp;</label>
+      <button class="chip" style="padding:9px 14px" onclick="verTodoElMapa()">Ver todo</button>
+    </div>
+    <div class="mt">
       <label>Estado</label>
       <select id="mp-estado" onchange="pintarMapa()">
-        <option value="">Todos los clientes</option>
+        <option value="">Universo completo</option>
+        <option value="cartera">Cartera</option>
         <option value="comp">Compradores del mes</option>
-        <option value="nocomp">No compradores del mes</option>
+        <option value="nocomp">Cartera que no compró</option>
+        <option value="fuera">Fuera de cartera (oportunidad)</option>
         <option value="perdido">Dejaron de comprar</option>
         <option value="exhib">Con exhibidor</option>
       </select>
@@ -3183,9 +3189,11 @@ init();
 // Canal -> forma del marcador. El color lo decide el estado comercial del
 // mes seleccionado, no el canal: la forma dice QUE es, el color dice COMO va.
 const MP_FORMA = { 'Autoservicio':'', 'Tradicional':'sq', 'Otros':'di', 'Sin tipificar':'di' };
-const MP_COLOR = { alto:'#7ac943', comprador:'#3ecfb2', perdido:'#ff8c42', nunca:'#5c6f68' };
+const MP_COLOR = { alto:'#7ac943', comprador:'#3ecfb2', perdido:'#ff8c42',
+                   cartera:'#4f7a70', fuera:'#6b7a75' };
 const MP_DIA_COLOR = { Lunes:'#f5c842', Martes:'#7b61ff', 'Miércoles':'#3ecfb2',
                        Jueves:'#ff8c42', Viernes:'#ff5f9e' };
+const ZONAS_EXTRA = ['Fuera de zona'];
 
 let MP = { data:null, zonas:null, map:null, capaPts:null, capaZonas:null,
            canales:new Set(), zonasOn:new Set(), sel:null, cargando:false };
@@ -3234,26 +3242,28 @@ async function initMapa() {
     `<span class="chip on" data-canal="${c}" onclick="toggleChip(this,'canal')">${c}</span>`).join('');
 
   // Chips de zona
-  // A las zonas del KML se suma cualquier zona que traigan los clientes y
-  // que no tenga poligono (por ej. "Sin zona"), para que ningun cliente
-  // quede invisible sin que se vea por que.
-  const zsKml = MP.zonas.features.map(f => ({ n: f.properties.nombre,
-                    lbl: f.properties.dia || f.properties.nombre.replace('Distribuidor Nicho', 'Distrib.') }));
-  const extra = [...new Set(MP.data.clientes.flatMap(c => c.zonas))]
-    .filter(z => !zsKml.some(k => k.n.startsWith(z) || z.startsWith(k.n)))
-    .map(z => ({ n: z, lbl: z }));
-  const todas = [...zsKml, ...extra];
-  todas.forEach(z => MP.zonasOn.add(z.n));
+  // Las 5 zonas de venta mas "Fuera de zona", para que ningun cliente
+  // del maestro quede invisible sin que se vea por que.
+  const todas = [...MP.zonas.features.map(f => f.properties.nombre), ...ZONAS_EXTRA];
+  todas.forEach(z => MP.zonasOn.add(z));
   document.getElementById('mp-zonas').innerHTML = todas.map(z =>
-    `<span class="chip on" data-zona="${z.n}" onclick="toggleChip(this,'zona')">${z.lbl}</span>`).join('');
+    `<span class="chip on" data-zona="${z}" onclick="toggleChip(this,'zona')">${z}</span>`).join('');
 
   MP.cargando = false;
   // El div estaba oculto al crear el mapa, asi que Leaflet arranco con un
   // tamaño equivocado: hay que recalcularlo y encuadrar ya visible, antes
   // de pintar nada.
   MP.map.invalidateSize();
-  MP.map.fitBounds(L.geoJSON(MP.zonas).getBounds(), { padding: [18, 18] });
+  verTodoElMapa();
   pintarMapa();
+}
+
+// Vuelve al encuadre de las zonas. Hace falta porque al abrir el detalle
+// de un cliente el mapa hace zoom sobre el punto.
+function verTodoElMapa() {
+  if (!MP.map) return;
+  MP.map.invalidateSize();
+  MP.map.fitBounds(L.geoJSON(MP.zonas).getBounds(), { padding: [18, 18] });
 }
 
 function toggleChip(el, tipo) {
@@ -3283,9 +3293,11 @@ function estadoCliente(c, mes, prov, umbral) {
     const v = c.meses[k];
     return (prov ? (v.provs[prov] || 0) : v.fact) > 0;
   });
-  let est = 'nunca';
-  if (compro) est = (umbral > 0 && fact >= umbral) ? 'alto' : 'comprador';
-  else if (historico) est = 'perdido';
+  let est;
+  if (compro)          est = (umbral > 0 && fact >= umbral) ? 'alto' : 'comprador';
+  else if (historico)  est = 'perdido';      // dejo de comprar
+  else if (c.cartera)  est = 'cartera';      // lo visito, no me compro
+  else                 est = 'fuera';        // del universo, fuera de cartera
   return { est, fact, ops: m ? m.ops : 0 };
 }
 
@@ -3302,10 +3314,8 @@ function pintarMapa() {
   MP.zonas.features.forEach(f => {
     if (!MP.zonasOn.has(f.properties.nombre)) return;
     const col = MP_DIA_COLOR[f.properties.dia] || '#7d968c';
-    L.geoJSON(f, { style:{ color:col, weight:2, opacity:.75,
-                           fillColor:col, fillOpacity:f.properties.tipo === 'venta' ? .07 : .03,
-                           dashArray:f.properties.tipo === 'venta' ? null : '6 5' } })
-      .bindTooltip(f.properties.nombre, { sticky:true })
+    L.geoJSON(f, { style:{ color:col, weight:2, opacity:.8, fillColor:col, fillOpacity:.07 } })
+      .bindTooltip('Zona ' + f.properties.nombre, { sticky:true })
       .addTo(MP.capaZonas);
   });
 
@@ -3314,13 +3324,15 @@ function pintarMapa() {
   const visibles = [];
   for (const c of MP.data.clientes) {
     if (!MP.canales.has(c.canal)) continue;
-    if (c.zonas.length && !c.zonas.some(z => [...MP.zonasOn].some(o => o.startsWith(z) || z.startsWith(o)))) continue;
-    if (!c.zonas.length && !MP.zonasOn.has('Sin zona')) continue;
+    if (!MP.zonasOn.has(c.zona)) continue;
     if (q && !((c.nom || '').toLowerCase().includes(q) || (c.dir || '').toLowerCase().includes(q))) continue;
 
     const s = estadoCliente(c, mes, prov, umbral);
-    if (filtro === 'comp'    && s.est !== 'comprador' && s.est !== 'alto') continue;
-    if (filtro === 'nocomp'  && (s.est === 'comprador' || s.est === 'alto')) continue;
+    const comprador = s.est === 'comprador' || s.est === 'alto';
+    if (filtro === 'cartera' && !c.cartera) continue;
+    if (filtro === 'comp'    && !comprador) continue;
+    if (filtro === 'nocomp'  && (comprador || !c.cartera)) continue;
+    if (filtro === 'fuera'   && c.cartera) continue;
     if (filtro === 'perdido' && s.est !== 'perdido') continue;
     if (filtro === 'exhib'   && !c.exhibidor) continue;
 
@@ -3344,17 +3356,23 @@ function pintarMapa() {
 }
 
 function pintarKpis(vis, umbral) {
+  const cart  = vis.filter(v => v.c.cartera);
   const comp  = vis.filter(v => v.s.est === 'comprador' || v.s.est === 'alto');
   const total = comp.reduce((a, v) => a + v.s.fact, 0);
   const perd  = vis.filter(v => v.s.est === 'perdido').length;
   const exh   = vis.filter(v => v.c.exhibidor).length;
-  const cob   = vis.length ? (comp.length / vis.length * 100) : 0;
+  // Penetración: cuánto del universo es cartera. Cobertura: cuánto de la
+  // cartera compró en el mes.
+  const pen = vis.length  ? (cart.length / vis.length  * 100) : 0;
+  const cob = cart.length ? (comp.length / cart.length * 100) : 0;
   const kpis = [
-    [vis.length,            'Clientes en vista'],
+    [vis.length,            'Universo'],
+    [cart.length,           'Cartera · ' + pen.toFixed(0) + '% del universo'],
     [comp.length,           'Compradores del mes'],
-    [cob.toFixed(1) + '%',  'Cobertura'],
+    [cob.toFixed(1) + '%',  'Cobertura de cartera'],
     [fmtK(total),           'Facturación'],
     [perd,                  'Dejaron de comprar'],
+    [vis.length - cart.length, 'Fuera de cartera'],
     [exh,                   'Con exhibidor'],
   ];
   document.getElementById('mp-kpis').innerHTML = kpis.map(([v, l]) =>
@@ -3398,7 +3416,8 @@ async function verCliente(cod) {
     <div class="dt-dir">${c.dir || 'Sin dirección'}</div>
     <div class="dt-row"><span>Código</span><b>${c.cod}</b></div>
     <div class="dt-row"><span>Canal</span><b>${c.canal}</b></div>
-    <div class="dt-row"><span>Zona</span><b>${(c.zonas || []).join(', ') || '—'}</b></div>
+    <div class="dt-row"><span>Zona</span><b>${c.zona}</b></div>
+    <div class="dt-row"><span>Situación</span><b style="color:${c.cartera ? 'var(--brand)' : 'var(--muted)'}">${c.cartera ? 'En cartera' : 'Fuera de cartera'}</b></div>
     <div class="dt-row"><span>Vendedor</span><b>${c.vendedor || '—'}</b></div>
     <div class="dt-row"><span>Exhibidor</span><b style="color:${c.exhibidor ? 'var(--accent)' : 'var(--muted)'}">${c.exhibidor ? 'Sí' : 'No'}</b></div>
     <div class="dt-row"><span>${mes}</span><b>${m ? fmtM(m.fact) + ' · ' + m.ops + (m.ops === 1 ? ' compra' : ' compras') : 'sin compras'}</b></div>
