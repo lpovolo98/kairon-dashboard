@@ -73,9 +73,22 @@ def autorizar(request: Request):
 
 
 def _odoo():
+    """Cliente de Odoo con las mismas credenciales que usa el dashboard.
+
+    La clave se busca en ODOO_KEY y, si no está, en ODOO_PASSWORD: el
+    dashboard la tiene con el segundo nombre. No se usa Odoo.desde_config()
+    justamente porque solo mira ODOO_KEY y en Railway eso falla.
+    """
     from administracion.odoo import Odoo, OdooError
+    clave = os.getenv("ODOO_KEY") or os.getenv("ODOO_PASSWORD") or ""
+    datos = {"url": os.getenv("ODOO_URL", ""), "db": os.getenv("ODOO_DB", ""),
+             "usuario": os.getenv("ODOO_USER", ""), "clave": clave}
+    faltan = [k.upper() for k, v in datos.items() if not v]
+    if faltan:
+        raise HTTPException(503, "Faltan credenciales de Odoo: " + ", ".join(
+            "ODOO_PASSWORD" if f == "CLAVE" else "ODOO_" + f for f in faltan))
     try:
-        return Odoo.desde_config()
+        return Odoo(**datos)
     except OdooError as e:
         raise HTTPException(503, str(e))
 

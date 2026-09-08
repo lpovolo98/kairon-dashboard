@@ -33,7 +33,12 @@ const normalizar = s => String(s ?? '')
 
 async function pedir(ruta, opciones) {
   const r = await fetch(`${API}${ruta}`, opciones);
-  if (!r.ok) throw new Error(`${ruta} respondió ${r.status}`);
+  if (!r.ok) {
+    // El servidor explica qué falta; un "respondió 503" pelado no sirve.
+    let detalle = `${ruta} respondió ${r.status}`;
+    try { const j = await r.json(); if (j.detail) detalle = j.detail; } catch (e) {}
+    throw new Error(detalle);
+  }
   return r.json();
 }
 
@@ -57,7 +62,7 @@ async function iniciar() {
     ESTADO.catalogo = await pedir('/api/productos/catalogo');
     prepararMasiva();
   } catch (e) {
-    $('#conexion').textContent = 'No se pudo conectar con el servicio. Revisá la configuración.';
+    $('#conexion').textContent = e.message || 'No se pudo conectar con el servicio.';
   }
   try {
     ESTADO.pendientes = await pedir('/api/productos/pendientes');

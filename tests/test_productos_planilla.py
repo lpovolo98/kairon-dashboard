@@ -226,3 +226,52 @@ class Persistencia(unittest.TestCase):
         with patch.dict(os.environ, {"PRODUCTOS_DATA_DIR": "/data/productos"}), \
              patch.object(os.path, "ismount", return_value=True):
             self.assertTrue(api.persistente())
+
+
+class Credenciales(unittest.TestCase):
+    """El dashboard guarda la clave de Odoo en ODOO_PASSWORD; el agente
+    administrativo acepta ODOO_KEY o ODOO_PASSWORD. Usar el atajo
+    Odoo.desde_config(), que solo mira ODOO_KEY, dejaba el módulo entero sin
+    conexión en Railway."""
+
+    def _construir(self, entorno):
+        import os
+        from unittest.mock import patch, MagicMock
+        from productos import api
+        creado = MagicMock()
+        with patch.dict(os.environ, entorno, clear=True), \
+             patch("administracion.odoo.Odoo", return_value=creado) as fabrica:
+            resultado = api._odoo()
+        return resultado, creado, fabrica
+
+    def test_funciona_solo_con_odoo_password(self):
+        r, creado, fabrica = self._construir({
+            "ODOO_URL": "https://kairon.odoo.com", "ODOO_DB": "kairon",
+            "ODOO_USER": "lucas", "ODOO_PASSWORD": "secreto"})
+        self.assertIs(r, creado)
+        self.assertEqual(fabrica.call_args.kwargs["clave"], "secreto")
+
+    def test_odoo_key_tiene_prioridad_si_estan_las_dos(self):
+        r, creado, fabrica = self._construir({
+            "ODOO_URL": "https://kairon.odoo.com", "ODOO_DB": "kairon",
+            "ODOO_USER": "lucas", "ODOO_KEY": "la-key", "ODOO_PASSWORD": "secreto"})
+        self.assertEqual(fabrica.call_args.kwargs["clave"], "la-key")
+
+    def test_sin_clave_avisa_cual_falta(self):
+        import os
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        from productos import api
+        with patch.dict(os.environ, {"ODOO_URL": "u", "ODOO_DB": "d", "ODOO_USER": "us"}, clear=True):
+            with self.assertRaises(HTTPException) as ctx:
+                api._odoo()
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertIn("ODOO_PASSWORD", ctx.exception.detail)
+
+    def test_no_usa_el_atajo_que_solo_mira_odoo_key(self):
+        """Regresión directa del bug: si alguien vuelve a llamar a
+        desde_config(), este test lo caza. Mira los nombres que resuelve el
+        bytecode, no el texto, para no confundirse con los comentarios."""
+        from productos import api
+        self.assertNotIn("desde_config", api._odoo.__code__.co_names)
+        self.assertIn("ODOO_PASSWORD", api._odoo.__code__.co_consts)
