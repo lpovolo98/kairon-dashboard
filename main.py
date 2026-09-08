@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
 from twilio.rest import Client as TwilioClient
 import threading
+import unicodedata
 
 load_dotenv()
 
@@ -1277,9 +1278,43 @@ CAMPO_DIA_VISITA = "x_studio_many2many_field_4bq_1j6ma1s65"
 # QuadMinds: es la fuente con coordenadas completas para los 806 puntos.
 # Odoo aporta la parte comercial y, si tiene coordenadas propias cargadas,
 # se prefieren esas.
-_GEO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "static", "data", "clientes_geo.json")
+_DATA_STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "data")
+_GEO_PATH    = os.path.join(_DATA_STATIC, "clientes_geo.json")
+_ZONAS_PATH  = os.path.join(_DATA_STATIC, "zonas.geojson")
 _geo_cache = None
+_zonas_cache = None
+
+
+def cargar_zonas():
+    """Anillos de las 5 zonas de venta, para ubicar un punto."""
+    global _zonas_cache
+    if _zonas_cache is None:
+        with open(_ZONAS_PATH, "r", encoding="utf-8") as f:
+            gj = json.load(f)
+        _zonas_cache = [(f["properties"]["nombre"], f["geometry"]["coordinates"][0])
+                        for f in gj["features"]]
+    return _zonas_cache
+
+
+def zona_de(lon, lat):
+    """Zona que contiene al punto (ray casting). La zona se calcula acá y no
+    en el maestro porque las coordenadas pueden venir de Odoo: si se usara la
+    precalculada, un cliente podría quedar dibujado dentro de un polígono y
+    etiquetado con otro."""
+    for nombre, anillo in cargar_zonas():
+        dentro = False
+        for i in range(len(anillo) - 1):
+            x1, y1 = anillo[i]
+            x2, y2 = anillo[i + 1]
+            if (y1 > lat) != (y2 > lat) and lon < x1 + (lat - y1) / (y2 - y1) * (x2 - x1):
+                dentro = not dentro
+        if dentro:
+            return nombre
+    return "Fuera de zona"
+
+
+def _sin_acentos(s):
+    return unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode().lower()
 
 def cargar_geo_clientes():
     global _geo_cache
@@ -1419,9 +1454,26 @@ def build_mapa_data(uid, models, meses_n=12):
     meses = sorted({o["date_order"][:7] for o in ordenes})
     proveedores = sorted({p for r in acum.values() for m in r["meses"].values() for p in m["provs"]})
 
+    # El cruce tiene que ser 1 a 1. Sin esto, dos fichas del maestro que
+    # comparten nombre (una sucursal cargada dos veces, por ejemplo) matchean
+    # contra el mismo partner y sus ventas se cuentan dos veces en los KPIs.
+    asignado, usados = {}, set()
+    for g in geo:                                   # 1ª pasada: por código
+        p = por_cod.get(_norm_cod(g["cod"]))
+        if p and p["id"] not in usados:
+            asignado[g["cod"]] = p
+            usados.add(p["id"])
+    for g in geo:                                   # 2ª pasada: por nombre
+        if g["cod"] in asignado:
+            continue
+        p = por_nom.get((g["nom"] or "").strip().upper())
+        if p and p["id"] not in usados:
+            asignado[g["cod"]] = p
+            usados.add(p["id"])
+
     salida, matcheados = [], 0
     for g in geo:
-        p = por_cod.get(_norm_cod(g["cod"])) or por_nom.get((g["nom"] or "").strip().upper())
+        p = asignado.get(g["cod"])
         item = {
             "cod": g["cod"], "nom": g["nom"], "dir": g["dir"],
             "canal": g["canal"], "lat": g["lat"], "lon": g["lon"],
@@ -1439,6 +1491,7 @@ def build_mapa_data(uid, models, meses_n=12):
             la, lo = p.get("partner_latitude"), p.get("partner_longitude")
             if la and lo:
                 item["lat"], item["lon"] = round(la, 6), round(lo, 6)
+                item["zona"] = zona_de(item["lon"], item["lat"])
             if p.get("x_studio_canal"):
                 item["canal_odoo"] = p["x_studio_canal"]
             reg = acum.get(p["id"])
@@ -1465,12 +1518,20 @@ def build_mapa_data(uid, models, meses_n=12):
             "campo_dia_visita": CAMPO_DIA_VISITA if hay_dia else None,
             "con_dia_visita": sum(1 for c in salida if c["dias_visita"]),
             # Cuántos tienen el día de Odoo de acuerdo con la zona en la que
-            # caen geométricamente. Una brecha grande significa que el ruteo
-            # y los polígonos no están diciendo lo mismo.
+            # caen geométricamente. Se comparan sin acentos porque Odoo los
+            # escribe sin ellos ("Miercoles") y el KML con ("Miércoles").
             "dia_coincide_con_zona": sum(
                 1 for c in salida if c["dias_visita"] and
-                any(c["zona"].lower() in d.lower() or d.lower() in c["zona"].lower()
-                    for d in c["dias_visita"])),
+                any(_sin_acentos(c["zona"]) == _sin_acentos(d) for d in c["dias_visita"])),
+            "dia_difiere_de_zona": sum(
+                1 for c in salida if c["dias_visita"] and
+                not any(_sin_acentos(c["zona"]) == _sin_acentos(d) for d in c["dias_visita"])),
+            # Clientes de Odoo que no están en el maestro: no tienen
+            # coordenadas, así que hoy no se ven en el mapa.
+            "odoo_sin_geo": len(partners) - matcheados,
+            # Compran pero no tienen día de visita cargado.
+            "compran_sin_dia_visita": sum(
+                1 for c in salida if c["meses"] and not c["cartera"]),
             "campos_codigo_detectados": campos_cod,
             "coords_odoo_disponibles": bool(campos_geo),
             "exhibidor_codes": sorted(EXHIBIDOR_CODES),

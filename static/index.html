@@ -794,6 +794,7 @@ canvas { max-height: 200px; }
         <option value="comp">Compradores del mes</option>
         <option value="nocomp">Cartera que no compró</option>
         <option value="fuera">Fuera de cartera (oportunidad)</option>
+        <option value="sinruta">Compran sin día de visita</option>
         <option value="perdido">Dejaron de comprar</option>
         <option value="exhib">Con exhibidor</option>
       </select>
@@ -3190,7 +3191,7 @@ init();
 // mes seleccionado, no el canal: la forma dice QUE es, el color dice COMO va.
 const MP_FORMA = { 'Autoservicio':'', 'Tradicional':'sq', 'Otros':'di', 'Sin tipificar':'di' };
 const MP_COLOR = { alto:'#7ac943', comprador:'#3ecfb2', perdido:'#ff8c42',
-                   cartera:'#4f7a70', fuera:'#6b7a75' };
+                   sinruta:'#7b61ff', cartera:'#4f7a70', fuera:'#6b7a75' };
 const MP_DIA_COLOR = { Lunes:'#f5c842', Martes:'#7b61ff', 'Miércoles':'#3ecfb2',
                        Jueves:'#ff8c42', Viernes:'#ff5f9e' };
 const ZONAS_EXTRA = ['Fuera de zona'];
@@ -3294,10 +3295,11 @@ function estadoCliente(c, mes, prov, umbral) {
     return (prov ? (v.provs[prov] || 0) : v.fact) > 0;
   });
   let est;
-  if (compro)          est = (umbral > 0 && fact >= umbral) ? 'alto' : 'comprador';
-  else if (historico)  est = 'perdido';      // dejo de comprar
-  else if (c.cartera)  est = 'cartera';      // lo visito, no me compro
-  else                 est = 'fuera';        // del universo, fuera de cartera
+  if (compro && !c.cartera) est = 'sinruta';   // me compra pero no tiene dia de visita
+  else if (compro)          est = (umbral > 0 && fact >= umbral) ? 'alto' : 'comprador';
+  else if (historico)       est = 'perdido';   // dejo de comprar
+  else if (c.cartera)       est = 'cartera';   // lo visito, no me compro
+  else                      est = 'fuera';     // del universo, fuera de cartera
   return { est, fact, ops: m ? m.ops : 0 };
 }
 
@@ -3332,12 +3334,13 @@ function pintarMapa() {
     if (filtro === 'cartera' && !c.cartera) continue;
     if (filtro === 'comp'    && !comprador) continue;
     if (filtro === 'nocomp'  && (comprador || !c.cartera)) continue;
-    if (filtro === 'fuera'   && c.cartera) continue;
+    if (filtro === 'fuera'   && (c.cartera || s.fact > 0)) continue;
+    if (filtro === 'sinruta' && s.est !== 'sinruta') continue;
     if (filtro === 'perdido' && s.est !== 'perdido') continue;
     if (filtro === 'exhib'   && !c.exhibidor) continue;
 
     visibles.push({ c, s });
-    const activo = s.est === 'comprador' || s.est === 'alto';
+    const activo = s.fact > 0;
     const col = MP_COLOR[s.est];
     const px  = activo ? 13 : 10;
     const html = `<div class="mp ${MP_FORMA[c.canal] || ''}" style="width:${px}px;height:${px}px;`
@@ -3356,11 +3359,14 @@ function pintarMapa() {
 }
 
 function pintarKpis(vis, umbral) {
-  const cart  = vis.filter(v => v.c.cartera);
-  const comp  = vis.filter(v => v.s.est === 'comprador' || v.s.est === 'alto');
-  const total = comp.reduce((a, v) => a + v.s.fact, 0);
-  const perd  = vis.filter(v => v.s.est === 'perdido').length;
-  const exh   = vis.filter(v => v.c.exhibidor).length;
+  const cart    = vis.filter(v => v.c.cartera);
+  // Compradores, como quedó definido, son los de la cartera que compraron.
+  const comp    = vis.filter(v => v.s.est === 'comprador' || v.s.est === 'alto');
+  const sinruta = vis.filter(v => v.s.est === 'sinruta');
+  const total   = comp.reduce((a, v) => a + v.s.fact, 0)
+                + sinruta.reduce((a, v) => a + v.s.fact, 0);
+  const perd = vis.filter(v => v.s.est === 'perdido').length;
+  const exh  = vis.filter(v => v.c.exhibidor).length;
   // Penetración: cuánto del universo es cartera. Cobertura: cuánto de la
   // cartera compró en el mes.
   const pen = vis.length  ? (cart.length / vis.length  * 100) : 0;
@@ -3373,6 +3379,7 @@ function pintarKpis(vis, umbral) {
     [fmtK(total),           'Facturación'],
     [perd,                  'Dejaron de comprar'],
     [vis.length - cart.length, 'Fuera de cartera'],
+    [sinruta.length,        'Compran sin día de visita'],
     [exh,                   'Con exhibidor'],
   ];
   document.getElementById('mp-kpis').innerHTML = kpis.map(([v, l]) =>
