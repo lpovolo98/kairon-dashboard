@@ -7,7 +7,10 @@ import main
 
 PRIVADAS = ["/", "/portal", "/dashboard", "/administracion",
             "/static/index.html", "/static/portal.html",
-            "/api/stock", "/api/me", "/api/mapa/clientes"]
+            "/api/stock", "/api/me", "/api/mapa/clientes",
+            # Eran las dos excepciones publicas del reporte diario por
+            # WhatsApp. Al eliminarse ese circuito dejaron de estar exentas.
+            "/reporte/JK", "/api/reporte-diario"]
 
 
 class AccesoSinCloudflare(unittest.TestCase):
@@ -27,9 +30,11 @@ class AccesoSinCloudflare(unittest.TestCase):
             self.assertEqual(
                 c.get("/", cookies={"CF_Authorization": "tampoco.es.un.jwt"}).status_code, 403)
 
-    def test_status_sigue_publico_y_dice_si_access_esta_activo(self):
+    def test_status_es_la_unica_ruta_publica(self):
         # Es el healthcheck de Railway y el unico modo de ver desde afuera
-        # que version esta corriendo.
+        # que version esta corriendo. Ya no queda ninguna otra excepcion.
+        self.assertEqual(main.ACCESS_RUTAS_PUBLICAS, {"/api/status"})
+        self.assertEqual(main.ACCESS_PREFIJOS_PUBLICOS, ())
         with TestClient(main.app) as c:
             r = c.get("/api/status")
             self.assertEqual(r.status_code, 200)

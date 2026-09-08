@@ -9,12 +9,10 @@ from datetime import datetime, date, timedelta
 from collections import defaultdict
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from PIL import Image, ImageDraw, ImageFont
-from twilio.rest import Client as TwilioClient
 import threading
 import unicodedata
 
@@ -32,12 +30,6 @@ ODOO_USER = os.getenv("ODOO_USER", "")
 ODOO_PASS = os.getenv("ODOO_PASSWORD", "")
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "900"))  # 15 min default
 
-# ─── Twilio (reporte diario por WhatsApp) ────────────────────
-TWILIO_ACCOUNT_SID   = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN    = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "")   # ej: "whatsapp:+14155238886"
-REPORTE_WHATSAPP_TO  = os.getenv("REPORTE_WHATSAPP_TO", "")    # ej: "whatsapp:+5491132308807"
-REPORTE_CRON_SECRET  = os.getenv("REPORTE_CRON_SECRET", "")    # token simple para proteger el endpoint del cron
 
 # ─── Cloudflare Access ──────────────────────────────────────
 # Cloudflare pone un JWT firmado en cada request que pasa por el dominio.
@@ -62,13 +54,11 @@ if CF_ACCESS_TEAM_DOMAIN:
                              .replace("https://", "").replace("http://", "").rstrip("/"))
 
 # Rutas que tienen que seguir siendo publicas:
-#  - /reporte/{vendedor}: el link que se manda por WhatsApp. Los vendedores
-#    lo abren sin cuenta de Access. Es de solo lectura y de un vendedor.
-#  - /api/reporte-diario: lo dispara un cron externo, que se autentica con
-#    su propio secret (REPORTE_CRON_SECRET).
-#  - /api/status: healthcheck.
-ACCESS_RUTAS_PUBLICAS   = {"/api/status", "/api/reporte-diario"}
-ACCESS_PREFIJOS_PUBLICOS = ("/reporte/",)
+#  - /api/status: healthcheck de Railway.
+# El reporte diario por WhatsApp se elimino, asi que sus dos excepciones
+# (/reporte/{vendedor} y /api/reporte-diario) ya no estan.
+ACCESS_RUTAS_PUBLICAS   = {"/api/status"}
+ACCESS_PREFIJOS_PUBLICOS = ()
 
 _jwks_client = None
 _jwks_lock = threading.Lock()
@@ -1038,7 +1028,7 @@ def post_objetivos(body: GuardarObjetivosBody):
 def build_objetivos_avance(uid, models, mes):
     """Cruza los objetivos guardados de un mes con la venta real (Ventas +
     Cartera) para armar la matriz Vendedor > Proveedor con % de cumplimiento.
-    Reutilizada por el endpoint HTTP y por el reporte diario de WhatsApp."""
+    Alimenta la solapa de Objetivos del dashboard."""
     objetivos_data = cargar_objetivos().get(mes, {})
 
     ventas = build_ventas_data(uid, models)
@@ -1165,209 +1155,6 @@ def get_pedidos(mes: str):
 
     return {"mes": mes, "data": filas}
 
-
-def _semaforo_color(pct):
-    if pct >= 95: return (62, 207, 178)   # verde (--green)
-    if pct >= 70: return (245, 200, 66)   # amarillo (--yellow)
-    return (255, 79, 79)                  # rojo (--red)
-
-def _fmt_money(n):
-    return f"${n:,.0f}".replace(",", ".")
-
-def _fmt_num(n):
-    return f"{n:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-def _cargar_fuente(size, bold=False):
-    """Prioriza la fuente empaquetada junto al proyecto (static/DejaVuSans*.ttf)
-    para que el resultado sea idéntico sin importar la imagen base que use
-    Railway. Si por algún motivo no estuviera (ej. corriendo desde otra
-    carpeta), cae a la ruta típica del sistema, y como último recurso al
-    font default de Pillow para que la generación nunca falle del todo."""
-    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-    candidatos = [
-        os.path.join(static_dir, "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"),
-        os.path.join(static_dir, "DejaVuSans.ttf"),
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for ruta in candidatos:
-        if os.path.exists(ruta):
-            try:
-                return ImageFont.truetype(ruta, size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-def generar_imagen_objetivos(vendedor, mes, avance_vendedor):
-    """Dibuja la tabla de avance de un vendedor (Proveedor: Ventas/Objetivo/
-    Cajas/Objetivo/Cobertura, con barra de semáforo) como imagen PNG,
-    visualmente alineada a la paleta del dashboard."""
-    BG = (11, 13, 17)
-    BG2 = (19, 22, 29)
-    BG3 = (26, 30, 40)
-    BORDER = (37, 42, 56)
-    TEXT = (232, 234, 240)
-    MUTED = (92, 98, 120)
-    ACCENT2 = (62, 207, 178)
-
-    proveedores = sorted(avance_vendedor.keys())
-    row_h = 64
-    header_h = 110
-    footer_h = 30
-    width = 1120
-    height = header_h + row_h * (len(proveedores) + 1) + footer_h  # +1 = fila de totales
-
-    img = Image.new("RGB", (width, height), BG)
-    draw = ImageDraw.Draw(img)
-
-    f_title = _cargar_fuente(26, bold=True)
-    f_sub = _cargar_fuente(15)
-    f_header = _cargar_fuente(12, bold=True)
-    f_cell = _cargar_fuente(14)
-    f_cell_b = _cargar_fuente(14, bold=True)
-    f_pct = _cargar_fuente(13, bold=True)
-
-    # Header
-    draw.text((28, 22), f"Avance Objetivos — {vendedor}", font=f_title, fill=TEXT)
-    draw.text((28, 58), formatMes_py(mes), font=f_sub, fill=MUTED)
-
-    col_x = [28, 310, 460, 610, 760, 900]
-    headers = ["Proveedor", "Ventas $ / Obj.", "% Vtas", "Cajas / Obj.", "% Cajas", "% Cobertura"]
-    y_head = header_h - 26
-    for x, h in zip(col_x, headers):
-        draw.text((x, y_head), h.upper(), font=f_header, fill=MUTED)
-    draw.line([(28, header_h-4), (width-28, header_h-4)], fill=BORDER, width=1)
-
-    # Totales
-    vFactReal = sum(m["facturacion_real"] for m in avance_vendedor.values())
-    vFactObj  = sum(m["facturacion_objetivo"] for m in avance_vendedor.values())
-    vCajasReal = sum(m["cajas_real"] for m in avance_vendedor.values())
-    vCajasObj  = sum(m["cajas_objetivo"] for m in avance_vendedor.values())
-    vCartera = next(iter(avance_vendedor.values()))["clientes_cartera"] if avance_vendedor else 0
-    vConCompra = max((m["clientes_con_compra"] for m in avance_vendedor.values()), default=0)
-    coberturaRealV = round(vConCompra / vCartera * 100, 1) if vCartera > 0 else 0
-    objsCob = [m["cobertura_objetivo"] for m in avance_vendedor.values() if m["cobertura_objetivo"] > 0]
-    coberturaObjV = sum(objsCob)/len(objsCob) if objsCob else 0
-
-    def dibujar_fila(y, nombre, fact_real, fact_obj, cajas_real, cajas_obj, cob_real, cob_obj, es_total=False):
-        bg = BG3 if es_total else (BG2 if (y // row_h) % 2 == 0 else BG)
-        draw.rectangle([24, y, width-24, y+row_h-4], fill=bg)
-        fcell = f_cell_b if es_total else f_cell
-        nombre_corto = nombre if len(nombre) <= 26 else nombre[:24] + "…"
-        draw.text((col_x[0]+4, y+row_h//2-10), nombre_corto, font=fcell, fill=TEXT)
-
-        draw.text((col_x[1]+4, y+8), _fmt_money(fact_real), font=fcell, fill=TEXT)
-        draw.text((col_x[1]+4, y+30), f"obj: {_fmt_money(fact_obj) if fact_obj>0 else '—'}", font=f_cell, fill=MUTED)
-
-        pct_fact = (fact_real/fact_obj*100) if fact_obj > 0 else None
-        if pct_fact is not None:
-            color = _semaforo_color(pct_fact)
-            draw.text((col_x[2]+4, y+18), f"{round(pct_fact)}%", font=f_pct, fill=color)
-        else:
-            draw.text((col_x[2]+4, y+18), "—", font=f_cell, fill=MUTED)
-
-        draw.text((col_x[3]+4, y+8), _fmt_num(cajas_real), font=fcell, fill=TEXT)
-        draw.text((col_x[3]+4, y+30), f"obj: {_fmt_num(cajas_obj) if cajas_obj>0 else '—'}", font=f_cell, fill=MUTED)
-
-        pct_cajas = (cajas_real/cajas_obj*100) if cajas_obj > 0 else None
-        if pct_cajas is not None:
-            color = _semaforo_color(pct_cajas)
-            draw.text((col_x[4]+4, y+18), f"{round(pct_cajas)}%", font=f_pct, fill=color)
-        else:
-            draw.text((col_x[4]+4, y+18), "—", font=f_cell, fill=MUTED)
-
-        cob_txt = f"{cob_real:.1f}% / obj {cob_obj:.1f}%" if cob_obj > 0 else f"{cob_real:.1f}%"
-        draw.text((col_x[5]+4, y+8), cob_txt, font=f_cell, fill=TEXT)
-        pct_cob = (cob_real/cob_obj*100) if cob_obj > 0 else None
-        if pct_cob is not None:
-            color = _semaforo_color(pct_cob)
-            draw.text((col_x[5]+4, y+30), f"{round(pct_cob)}% cumpl.", font=f_pct, fill=color)
-
-    y = header_h
-    dibujar_fila(y, "TOTAL", vFactReal, vFactObj, vCajasReal, vCajasObj, coberturaRealV, coberturaObjV, es_total=True)
-    y += row_h
-    for p in proveedores:
-        m = avance_vendedor[p]
-        dibujar_fila(y, p, m["facturacion_real"], m["facturacion_objetivo"],
-                     m["cajas_real"], m["cajas_objetivo"], m["cobertura_real"], m["cobertura_objetivo"])
-        y += row_h
-
-    draw.text((28, height-24), "Kairon Distribuciones · Reporte automático diario", font=f_cell, fill=MUTED)
-
-    return img
-
-def formatMes_py(ym):
-    meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
-    y, m = ym.split("-")
-    return f"{meses[int(m)-1]} {y}"
-
-def enviar_reporte_whatsapp(vendedor="JK"):
-    """Genera la imagen del avance del mes en curso para `vendedor` y la
-    manda por WhatsApp via Twilio. Devuelve (ok: bool, detalle: str)."""
-    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, REPORTE_WHATSAPP_TO]):
-        return False, "Faltan variables de entorno de Twilio (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM / REPORTE_WHATSAPP_TO)"
-
-    mes = date.today().strftime("%Y-%m")
-    try:
-        uid, models = odoo_connect()
-        avance = build_objetivos_avance(uid, models, mes)
-    except Exception as e:
-        return False, f"Error consultando Odoo: {e}"
-
-    avance_vendedor = avance.get(vendedor)
-    if not avance_vendedor:
-        return False, f"No hay datos de avance para el vendedor '{vendedor}' en {mes}"
-
-    try:
-        img = generar_imagen_objetivos(vendedor, mes, avance_vendedor)
-    except Exception as e:
-        return False, f"Error generando la imagen: {e}"
-
-    # Guardamos el PNG en static/ para que Twilio pueda descargarlo por URL pública.
-    # Limpiamos reportes viejos primero (son efímeros, solo necesitan vivir
-    # el tiempo que tarda Twilio en buscarlos) para no acumular archivos.
-    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-    try:
-        for f in os.listdir(static_dir):
-            if f.startswith("reporte_") and f.endswith(".png"):
-                os.remove(os.path.join(static_dir, f))
-    except Exception:
-        pass
-
-    img_filename = f"reporte_{vendedor}_{mes}_{int(time.time())}.png"
-    img_path = os.path.join(static_dir, img_filename)
-    img.save(img_path, "PNG")
-
-    base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-    if not base_url:
-        return False, "Falta la variable de entorno PUBLIC_BASE_URL (la URL pública del dashboard, ej. https://web-production-xxxx.up.railway.app)"
-    img_url = f"{base_url}/static/{img_filename}"
-
-    try:
-        client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        reporte_link = f"{base_url}/reporte/{vendedor}?mes={mes}"
-        client.messages.create(
-            from_=TWILIO_WHATSAPP_FROM,
-            to=REPORTE_WHATSAPP_TO,
-            body=f"📊 Avance de objetivos — {vendedor} — {formatMes_py(mes)}\nVer detalle: {reporte_link}",
-            media_url=[img_url],
-        )
-    except Exception as e:
-        return False, f"Error enviando por Twilio: {e}"
-
-    return True, f"Reporte de {vendedor} enviado correctamente ({img_filename})"
-
-@app.get("/api/reporte-diario")
-def trigger_reporte_diario(secret: str = "", vendedor: str = "JK"):
-    """Endpoint que dispara el cron externo (ej. cron-job.org) todos los
-    días a las 8 AM. Protegido con un secret simple en query param."""
-    if REPORTE_CRON_SECRET and secret != REPORTE_CRON_SECRET:
-        raise HTTPException(status_code=403, detail="Secret inválido")
-    ok, detalle = enviar_reporte_whatsapp(vendedor)
-    if not ok:
-        raise HTTPException(status_code=500, detail=detalle)
-    return {"ok": True, "detalle": detalle}
-
 @app.get("/api/status")
 def status():
     return {
@@ -1393,14 +1180,6 @@ def status():
         "cache_ttl": CACHE_TTL,
         "cached_keys": list(_cache.keys()),
         "timestamp": datetime.now().isoformat(),
-        "twilio_configurado": {
-            "TWILIO_ACCOUNT_SID": bool(TWILIO_ACCOUNT_SID),
-            "TWILIO_AUTH_TOKEN": bool(TWILIO_AUTH_TOKEN),
-            "TWILIO_WHATSAPP_FROM": bool(TWILIO_WHATSAPP_FROM),
-            "REPORTE_WHATSAPP_TO": bool(REPORTE_WHATSAPP_TO),
-            "PUBLIC_BASE_URL": bool(os.getenv("PUBLIC_BASE_URL", "")),
-            "REPORTE_CRON_SECRET": bool(REPORTE_CRON_SECRET),
-        },
     }
 
 @app.get("/api/cobranzas")
@@ -2381,104 +2160,6 @@ def get_agente_export_preview(dias: str = None):
 # ─── Serve frontend ─────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/reporte/{vendedor}", response_class=HTMLResponse)
-def reporte_vendedor_html(vendedor: str, mes: str = None):
-    """Vista standalone de solo lectura: muestra ÚNICAMENTE el avance de
-    Objetivos de un vendedor puntual, sin nav ni acceso al resto del
-    dashboard. Pensada para el link que se manda por WhatsApp."""
-    mes = mes or date.today().strftime("%Y-%m")
-    try:
-        uid, models = odoo_connect()
-        avance = build_objetivos_avance(uid, models, mes)
-    except Exception as e:
-        return HTMLResponse(f"<html><body style='background:#0b0d11;color:#e8eaf0;font-family:sans-serif;padding:40px'>Error consultando datos: {e}</body></html>", status_code=500)
-
-    avance_vendedor = avance.get(vendedor)
-    if not avance_vendedor:
-        return HTMLResponse(f"<html><body style='background:#0b0d11;color:#e8eaf0;font-family:sans-serif;padding:40px'>No hay datos para el vendedor '{vendedor}' en {mes}.</body></html>", status_code=404)
-
-    proveedores = sorted(avance_vendedor.keys())
-
-    def barra(pct, label):
-        if pct >= 95: color = "#3ecfb2"
-        elif pct >= 70: color = "#f5c842"
-        else: color = "#ff4f4f"
-        clamped = min(100, max(0, pct))
-        return f'''<div style="display:flex;align-items:center;gap:8px;min-width:140px">
-          <div style="flex:1;background:#1a1e28;border-radius:4px;height:8px;overflow:hidden">
-            <div style="height:100%;border-radius:4px;width:{clamped}%;background:{color}"></div>
-          </div>
-          <span style="font-size:12px;font-weight:700;color:{color};min-width:36px;text-align:right">{round(pct)}%</span>
-        </div>'''
-
-    def fmt_money(n): return f"${n:,.0f}".replace(",", ".")
-    def fmt_num(n): return f"{n:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-    vFactReal = sum(m["facturacion_real"] for m in avance_vendedor.values())
-    vFactObj  = sum(m["facturacion_objetivo"] for m in avance_vendedor.values())
-    vCajasReal = sum(m["cajas_real"] for m in avance_vendedor.values())
-    vCajasObj  = sum(m["cajas_objetivo"] for m in avance_vendedor.values())
-    vCartera = next(iter(avance_vendedor.values()))["clientes_cartera"] if avance_vendedor else 0
-    vConCompra = max((m["clientes_con_compra"] for m in avance_vendedor.values()), default=0)
-    coberturaRealV = round(vConCompra / vCartera * 100, 1) if vCartera > 0 else 0
-    objsCob = [m["cobertura_objetivo"] for m in avance_vendedor.values() if m["cobertura_objetivo"] > 0]
-    coberturaObjV = sum(objsCob)/len(objsCob) if objsCob else 0
-
-    filas_html = ""
-    for p in proveedores:
-        m = avance_vendedor[p]
-        pct_fact = (m["facturacion_real"]/m["facturacion_objetivo"]*100) if m["facturacion_objetivo"] > 0 else None
-        pct_cajas = (m["cajas_real"]/m["cajas_objetivo"]*100) if m["cajas_objetivo"] > 0 else None
-        pct_cob = (m["cobertura_real"]/m["cobertura_objetivo"]*100) if m["cobertura_objetivo"] > 0 else None
-        filas_html += f'''<tr style="border-bottom:1px solid #252a38">
-          <td style="padding:12px 14px;font-size:13px">{p}</td>
-          <td style="padding:12px 14px;text-align:right;font-size:13px">{fmt_money(m["facturacion_real"])}<br><span style="color:#5c6278;font-size:11px">obj: {fmt_money(m["facturacion_objetivo"]) if m["facturacion_objetivo"]>0 else "—"}</span></td>
-          <td style="padding:12px 14px">{barra(pct_fact, "vtas") if pct_fact is not None else "<span style=color:#5c6278>Sin objetivo</span>"}</td>
-          <td style="padding:12px 14px;text-align:right;font-size:13px">{fmt_num(m["cajas_real"])}<br><span style="color:#5c6278;font-size:11px">obj: {fmt_num(m["cajas_objetivo"]) if m["cajas_objetivo"]>0 else "—"}</span></td>
-          <td style="padding:12px 14px">{barra(pct_cajas, "cajas") if pct_cajas is not None else "<span style=color:#5c6278>Sin objetivo</span>"}</td>
-          <td style="padding:12px 14px;text-align:right;font-size:13px">{m["cobertura_real"]:.1f}% <span style="color:#5c6278">/ obj {m["cobertura_objetivo"]:.1f}%</span></td>
-          <td style="padding:12px 14px">{barra(pct_cob, "cob") if pct_cob is not None else "<span style=color:#5c6278>Sin objetivo</span>"}</td>
-        </tr>'''
-
-    html = f"""<!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Avance Objetivos — {vendedor}</title>
-<style>
-  body {{ background:#0b0d11; color:#e8eaf0; font-family:'Segoe UI',Arial,sans-serif; margin:0; padding:24px 16px; }}
-  h1 {{ font-size:20px; margin:0 0 4px; }}
-  .sub {{ color:#5c6278; font-size:13px; margin-bottom:20px; }}
-  table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-  thead th {{ background:#1a1e28; padding:10px 14px; text-align:left; font-size:10px; color:#5c6278; text-transform:uppercase; letter-spacing:1px; }}
-  .tablewrap {{ overflow-x:auto; border-radius:10px; border:1px solid #252a38; }}
-  .total-row td {{ background:#1a1e28; border-top:2px solid #3ecfb2; font-weight:800; padding:14px; }}
-  .footer {{ margin-top:16px; color:#5c6278; font-size:11px; text-align:center; }}
-</style></head>
-<body>
-  <h1>Avance Objetivos — {vendedor}</h1>
-  <div class="sub">{formatMes_py(mes)} · Kairon Distribuciones</div>
-  <div class="tablewrap">
-  <table>
-    <thead><tr>
-      <th>Proveedor</th><th>Ventas $</th><th>% Vtas</th><th>Cajas</th><th>% Cajas</th><th>Cobertura</th><th>% Cumpl.</th>
-    </tr></thead>
-    <tbody>
-      <tr class="total-row">
-        <td>TOTAL</td>
-        <td style="text-align:right">{fmt_money(vFactReal)}<br><span style="color:#5c6278;font-size:11px;font-weight:400">obj: {fmt_money(vFactObj) if vFactObj>0 else "—"}</span></td>
-        <td>{barra((vFactReal/vFactObj*100) if vFactObj>0 else 0, "vtas")}</td>
-        <td style="text-align:right">{fmt_num(vCajasReal)}<br><span style="color:#5c6278;font-size:11px;font-weight:400">obj: {fmt_num(vCajasObj) if vCajasObj>0 else "—"}</span></td>
-        <td>{barra((vCajasReal/vCajasObj*100) if vCajasObj>0 else 0, "cajas")}</td>
-        <td style="text-align:right">{coberturaRealV:.1f}% <span style="color:#5c6278">/ obj {coberturaObjV:.1f}%</span></td>
-        <td>{barra((coberturaRealV/coberturaObjV*100) if coberturaObjV>0 else 0, "cob")}</td>
-      </tr>
-      {filas_html}
-    </tbody>
-  </table>
-  </div>
-  <div class="footer">Vista de solo lectura · Reporte automático diario</div>
-</body></html>"""
-    return HTMLResponse(html)
 
 NO_CACHE = {
     "Cache-Control": "no-store, no-cache, must-revalidate",
