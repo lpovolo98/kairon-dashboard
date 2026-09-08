@@ -1372,6 +1372,17 @@ def trigger_reporte_diario(secret: str = "", vendedor: str = "JK"):
 def status():
     return {
         "ok": True,
+        # Bloque de diagnostico. /api/status es la unica ruta que queda
+        # publica, asi que es la unica forma de ver desde afuera si el
+        # contenedor que esta corriendo trae Access activo o no. No expone
+        # nada sensible: el AUD va cortado y el team domain ya es publico.
+        "access": {
+            "activo": access_configurado(),
+            "team_domain": CF_ACCESS_TEAM_DOMAIN,
+            "aud_termina_en": CF_ACCESS_AUD[-6:] if CF_ACCESS_AUD else "",
+            "aud_desde_env": bool(os.getenv("CF_ACCESS_AUD") is not None),
+            "commit": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:7],
+        },
         "administracion": {
             "version": "2026-09-08.1",
             "modo": "compra-confirmada-factura-borrador",
