@@ -487,3 +487,86 @@ def revertir(odoo, deshacer):
         odoo.call(c["modelo"], "write", [[c["id"]], {"active": False}])
         archivados += 1
     return {"devueltos": devueltos, "archivados": archivados}
+
+
+# ─── Modificación masiva sin archivo ─────────────────────────
+
+OPERACIONES = {
+    "fijar":      lambda actual, v: v,
+    "multiplicar": lambda actual, v: None if a_numero(actual) is None or a_numero(v) is None
+                                     else a_numero(actual) * a_numero(v),
+    "sumar":      lambda actual, v: None if a_numero(actual) is None or a_numero(v) is None
+                                     else a_numero(actual) + a_numero(v),
+    "reemplazar": lambda actual, v: str(actual or "").replace(v[0], v[1]) if isinstance(v, (list, tuple)) else actual,
+}
+
+
+def buscar_para_editar(odoo, categoria=None, proveedor=None, texto=None, limite=300):
+    """Productos que matchean el filtro, con su valor actual en cada columna.
+
+    La modificación masiva no tiene un camino de escritura propio: arma las
+    mismas filas que saldrían de un Excel y pasa por la misma
+    previsualización. Un solo camino que auditar.
+    """
+    lector = SoloLectura(odoo)
+    dominio = []
+    if categoria:
+        res = Resolvedor(lector)
+        errores = []
+        cat_id = res.buscar("product.category", categoria, errores, etiqueta="Categoría")
+        if errores:
+            raise Frenar(errores[0])
+        dominio.append(["categ_id", "=", cat_id])
+    if texto:
+        dominio.append(["name", "ilike", texto])
+    if proveedor:
+        res = Resolvedor(lector)
+        errores = []
+        partner = res.buscar("res.partner", proveedor, errores, etiqueta="Proveedor")
+        if errores:
+            raise Frenar(errores[0])
+        lineas = lector.call("product.supplierinfo", "search_read",
+                             [[["partner_id", "=", partner]]], {"fields": ["product_tmpl_id"]})
+        ids = [l["product_tmpl_id"][0] for l in lineas if l.get("product_tmpl_id")]
+        if not ids:
+            return []
+        dominio.append(["id", "in", ids])
+
+    campos = [c["campo"] for c in COLUMNAS_PRODUCTOS if not c.get("clave")]
+    filas = lector.call("product.template", "search_read", [dominio],
+                        {"fields": ["default_code"] + campos, "limit": limite, "order": "default_code"})
+
+    cache, salida = {}, []
+    for f in filas:
+        valores = {}
+        for spec in COLUMNAS_PRODUCTOS:
+            if spec.get("clave"):
+                continue
+            _, texto_actual = _valor_actual(f, spec, lector, cache)
+            valores[spec["col"]] = texto_actual
+        salida.append({"sku": (f.get("default_code") or "").strip(),
+                       "nombre": f.get("name") or "", "valores": valores})
+    return salida
+
+
+def aplicar_operacion(productos, columna, operacion, valor):
+    """Convierte el resultado de buscar_para_editar en filas listas para
+    previsualizar. Solo devuelve las que efectivamente cambian."""
+    if operacion not in OPERACIONES:
+        raise Frenar(f"Operación desconocida: {operacion}.")
+    spec = next((c for c in COLUMNAS_PRODUCTOS if c["col"] == columna), None)
+    if not spec:
+        raise Frenar(f"No existe la columna «{columna}».")
+    if operacion in ("multiplicar", "sumar") and spec["tipo"] != "numero":
+        raise Frenar(f"«{columna}» no es numérica: solo se puede fijar o reemplazar texto.")
+
+    filas = []
+    for p in productos:
+        actual = p["valores"].get(columna)
+        nuevo = OPERACIONES[operacion](actual, valor)
+        if nuevo is None or mismo_valor(nuevo, actual, spec["tipo"]):
+            continue
+        if spec["tipo"] == "numero":
+            nuevo = round(float(nuevo), 4)
+        filas.append({"Referencia interna (SKU)": p["sku"], columna: nuevo})
+    return filas

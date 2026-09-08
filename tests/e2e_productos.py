@@ -54,6 +54,15 @@ TSV = "\t".join(["Referencia interna (SKU)", "Nombre", "Categoría", "Unidad",
 ])
 
 SALIDA = tempfile.mkdtemp(prefix="e2e-capturas-")
+def volver_a_la_entrada(pg):
+    """Tras revertir, la pagina se recarga y ya esta en la vista de entrada;
+    tras previsualizar, hay que salir con el boton."""
+    if pg.is_visible("#btn-otro-archivo"):
+        pg.click("#btn-otro-archivo")
+    pg.wait_for_selector("#pegar-productos", state="visible", timeout=10000)
+    pg.wait_for_timeout(200)
+
+
 fallas = []
 def check(ok, msg):
     print(("  OK   " if ok else "  FALLA ") + msg)
@@ -115,7 +124,71 @@ with sync_playwright() as pw:
     check(all(not r["active"] for r in creados), "los productos creados quedaron archivados, no borrados")
     check(all(r.get("default_code") in ("400099","400098") for r in creados), "siguen existiendo en la base")
 
-    print("\n6) Errores de JavaScript")
+    print("\n6) Descargar la plantilla")
+    import urllib.request
+    pedido = urllib.request.Request(f"http://127.0.0.1:{PORT}/api/productos/plantilla.xlsx")
+    pedido.add_header("Cookie", "CF_Authorization=token-de-prueba")
+    xlsx = urllib.request.urlopen(pedido).read()
+    from openpyxl import load_workbook
+    import io as _io
+    wb = load_workbook(_io.BytesIO(xlsx))
+    check(set(wb.sheetnames) == {"Productos", "Proveedores", "Precios", "Valores válidos"},
+          f"la plantilla trae las cuatro hojas: {wb.sheetnames}")
+    validos = [f[1].value for f in wb["Valores válidos"].iter_rows(min_row=2)]
+    check("Panificados" in validos and "Mayorista" in validos,
+          "trae los valores válidos que Odoo acepta hoy")
+
+    print("\n7) Subir un .xlsx de verdad")
+    from openpyxl import Workbook
+    wb2 = Workbook(); wb2.remove(wb2.active)
+    ws = wb2.create_sheet("Productos")
+    ws.append(["Referencia interna (SKU)", "Nombre", "Precio de venta"])
+    ws.append(["400005", "Pan de Campo x600g", 3999])
+    ws2 = wb2.create_sheet("Precios")
+    ws2.append(["SKU (igual al de Productos)", "Lista de precios", "Precio fijo"])
+    ws2.append(["400005", "Mayorista", 3500])
+    ruta = os.path.join(SALIDA, "plantilla.xlsx"); wb2.save(ruta)
+
+    volver_a_la_entrada(pg)
+    # A esta altura ya hubo escrituras legitimas (aplicar y revertir): lo que
+    # se comprueba es que estos pasos no agreguen ninguna.
+    escrituras_antes = len(o.escrituras)
+    pg.set_input_files("#file-productos", ruta)
+    pg.click("#btn-leer-productos")
+    pg.wait_for_selector("#tabla-productos tbody tr", timeout=15000); pg.wait_for_timeout(400)
+    check(pg.evaluate("ESTADO.filas.productos.map(f=>f.estado)") == ["modificacion"],
+          "la hoja Productos del .xlsx se leyó y previsualizó")
+    check(pg.evaluate("ESTADO.filas.precios.length") == 1,
+          "la hoja Precios del mismo archivo también se leyó")
+    check(len(o.escrituras) == escrituras_antes, "leer un archivo no escribe nada")
+
+    print("\n8) Modificación masiva sin archivo")
+    volver_a_la_entrada(pg)
+    escrituras_antes = len(o.escrituras)
+    pg.select_option("#m-categoria", "Panificados")
+    pg.select_option("#m-columna", "Precio de venta")
+    pg.select_option("#m-operacion", "multiplicar")
+    pg.fill("#m-valor", "1.15")
+    pg.click("#btn-masiva")
+    pg.wait_for_selector("#tabla-productos tbody tr", timeout=15000); pg.wait_for_timeout(500)
+    estados = pg.evaluate("ESTADO.filas.productos.map(f=>[f.sku,f.estado])")
+    check(sorted(e[0] for e in estados) == ["400001", "400005"],
+          f"solo los que cambian: {estados}")
+    check(all(e[1] == "modificacion" for e in estados), "todos son modificaciones")
+    check(len(o.escrituras) == escrituras_antes,
+          "la modificación masiva tampoco escribe al previsualizar")
+    pg.screenshot(path=os.path.join(SALIDA, "e2e-3-masiva.png"))
+
+    pg.click("#btn-aplicar")
+    pg.wait_for_selector("#btn-revertir", timeout=20000); pg.wait_for_timeout(400)
+    check(abs(o.datos["product.template"][d["p1"]]["list_price"] - 2890 * 1.15) < 0.01,
+          f"400001 quedó en {o.datos['product.template'][d['p1']]['list_price']} (2890 x 1.15)")
+    check(abs(o.datos["product.template"][d["p2"]]["list_price"] - 3180 * 1.15) < 0.01,
+          f"400005 quedó en {o.datos['product.template'][d['p2']]['list_price']} (3180 x 1.15)")
+    check("image_1920" not in [k for m in o.escrituras if m[1] == "write" for k in m[2][1]],
+          "no se tocó ningún campo fuera del pedido")
+
+    print("\n9) Errores de JavaScript")
     reales = [e for e in errs if "ERR_CONNECTION" not in e]
     check(not reales, f"sin errores de JS ({reales})")
     b.close()

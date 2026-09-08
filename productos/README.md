@@ -81,14 +81,35 @@ del portal verifica contra Cloudflare Access: no hay login propio.
 Un solo worker ASGI: `aplicar` toma un mutex en SQLite para que dos corridas en
 paralelo no creen el mismo producto dos veces.
 
+## Entradas
+
+Cuatro caminos, todos hacia la misma previsualización:
+
+1. **Archivo** `.xlsx` con las hojas Productos, Proveedores y Precios —la
+   plantilla vigente se lee sin cambios— o un `.csv` de una sola hoja. Va como
+   cuerpo crudo, igual que los PDF del agente administrativo, así el tope de
+   tamaño se aplica mientras se recibe.
+2. **Pegado desde Excel**: se copian las celdas y se pegan. Sin archivo.
+3. **Modificación masiva sin archivo**: se filtra por categoría, proveedor o
+   texto, se elige un campo y una operación —fijar, multiplicar, sumar, buscar
+   y reemplazar— y el resultado se convierte en las mismas filas que saldrían
+   de un Excel. No tiene camino de escritura propio: hay uno solo que auditar.
+   Los productos que no cambian ni aparecen.
+4. **Plantilla descargable**, generada desde el esquema, con una hoja «Valores
+   válidos» que trae lo que Odoo acepta hoy en cada desplegable. Es lo que
+   hacía `descubrir_catalogo.py`, ya integrado.
+
 ## Pendiente
 
-- Lectura del `.xlsx` (hoy anda el pegado desde Excel).
-- Modificación masiva sin archivo: filtrar en Odoo y aplicar una operación.
 - La cola con el agente administrativo tiene el endpoint y la función
   `encolar()`, pero el agente administrativo todavía no la llama.
 
 ## Pruebas
 
-    python -m pytest tests/test_productos.py          # 34, con un Odoo en memoria
-    python tests/e2e_productos.py                     # navegador -> API -> motor
+    python -m pytest tests/test_productos.py           # motor: 34 pruebas
+    python -m pytest tests/test_productos_planilla.py  # planilla y masiva: 18
+    python tests/e2e_productos.py                      # navegador -> API -> motor
+
+Las dos primeras corren contra un Odoo en memoria (`tests/odoo_falso.py`) que
+anota cada escritura: se puede afirmar no solo que el resultado es correcto,
+sino que no se tocó nada de más. La tercera necesita Playwright.

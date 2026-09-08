@@ -12,10 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
-from . import cargar, imagenes
-from .esquema import HOJAS
+from . import cargar, imagenes, planilla
+from .esquema import COLUMNAS_PRODUCTOS, HOJAS
 
 router = APIRouter()
 RAIZ = Path(__file__).resolve().parents[1]
@@ -89,11 +89,10 @@ def status(owner=Depends(autorizar)):
     return {"ready": not faltan, "missing": faltan, "tope": TOPE_REGISTROS}
 
 
-@router.get("/api/productos/catalogo")
-def catalogo(owner=Depends(autorizar)):
+def _catalogo(o):
     """Los valores válidos de cada desplegable, tal como están hoy en Odoo.
-    Es lo que hacía descubrir_catalogo.py, servido a la pantalla."""
-    o = _odoo()
+    Es lo que hacía descubrir_catalogo.py. Lo usan la pantalla y la plantilla
+    que se descarga."""
     def leer(modelo, dominio=None, limite=400):
         filas = o.call(modelo, "search_read", [dominio or []],
                        {"fields": ["display_name"], "limit": limite, "order": "display_name"})
@@ -105,13 +104,81 @@ def catalogo(owner=Depends(autorizar)):
         "impuestos_compra": leer("account.tax", [["type_tax_use", "=", "purchase"]]),
         "listas":           leer("product.pricelist"),
         "proveedores":      leer("res.partner", [["supplier_rank", ">", 0]]),
+        # Para que la modificación masiva ofrezca solo columnas que existen,
+        # con las operaciones que su tipo admite.
+        "columnas": [{"col": c["col"], "tipo": c["tipo"]}
+                     for c in COLUMNAS_PRODUCTOS if not c.get("clave")],
     }
 
 
-@router.get("/api/productos/plantilla")
+@router.get("/api/productos/catalogo")
+def catalogo(owner=Depends(autorizar)):
+    return _catalogo(_odoo())
+
+
+@router.get("/api/productos/plantilla.xlsx")
 def plantilla(owner=Depends(autorizar)):
-    """Encabezados de cada hoja, para armar la plantilla del lado del cliente."""
-    return {hoja: [c["col"] for c in conf["columnas"]] for hoja, conf in HOJAS.items()}
+    """Plantilla en blanco, con los valores que Odoo acepta hoy en una hoja
+    aparte. Es lo que hacía descubrir_catalogo.py, ya integrado."""
+    try:
+        datos = planilla.generar_plantilla(_catalogo(_odoo()))
+    except ValueError as e:
+        raise HTTPException(503, str(e))
+    return Response(datos, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="plantilla_catalogo.xlsx"'})
+
+
+@router.post("/api/productos/leer")
+async def leer(request: Request, nombre: str = "", owner=Depends(autorizar)):
+    """Lee la plantilla y devuelve las filas crudas. No toca Odoo: la
+    previsualización es un paso aparte.
+
+    El archivo llega como cuerpo crudo, igual que los PDF del agente
+    administrativo: así el tope de tamaño se aplica mientras se recibe, sin
+    juntar en memoria un archivo enorme antes de rechazarlo."""
+    contenido = bytearray()
+    async for pedazo in request.stream():
+        contenido.extend(pedazo)
+        if len(contenido) > planilla.TOPE_BYTES:
+            raise HTTPException(413, f"El archivo supera los {planilla.TOPE_BYTES // 1024 // 1024} MB.")
+    if not contenido:
+        raise HTTPException(422, "El archivo llegó vacío.")
+    try:
+        return planilla.leer(nombre, bytes(contenido))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.get("/api/productos/buscar")
+def buscar(categoria: str = "", proveedor: str = "", texto: str = "",
+           owner=Depends(autorizar)):
+    """Productos que matchean el filtro, para la modificación masiva sin
+    archivo."""
+    if not (categoria or proveedor or texto):
+        raise HTTPException(422, "Elegí al menos un filtro: se estarían trayendo todos los productos.")
+    try:
+        return cargar.buscar_para_editar(_odoo(), categoria or None, proveedor or None, texto or None)
+    except cargar.Frenar as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/api/productos/operacion")
+def operacion(cuerpo: dict, owner=Depends(autorizar)):
+    """Arma las filas que resultan de aplicar una operación al resultado de
+    un filtro, y las previsualiza por el camino de siempre. La modificación
+    masiva no tiene un camino de escritura propio."""
+    o = _odoo()
+    try:
+        productos = cargar.buscar_para_editar(
+            o, cuerpo.get("categoria") or None, cuerpo.get("proveedor") or None,
+            cuerpo.get("texto") or None)
+        filas = cargar.aplicar_operacion(productos, cuerpo.get("columna"),
+                                         cuerpo.get("operacion"), cuerpo.get("valor"))
+    except cargar.Frenar as e:
+        raise HTTPException(422, str(e))
+    if not filas:
+        raise HTTPException(422, "Ningún producto del filtro cambia con esa operación.")
+    return {"filas": filas, "plan": _limpiar(cargar.previsualizar(o, {"productos": filas}))}
 
 
 @router.get("/api/productos/sin-imagen")

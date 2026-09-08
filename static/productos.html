@@ -79,6 +79,29 @@
           <div class="aviso">Los valores fijos de Kairon —<b>producto almacenable</b>, <b>facturar por cantidad ordenada</b>, <b>se puede vender y comprar</b>— vienen aplicados por defecto y se pueden cambiar por fila.</div>
         </div>
       </div>
+
+      <div class="card" id="masiva">
+        <div class="section-head">
+          <div><h2>Modificar sobre lo existente</h2>
+          <p>Sin archivo: filtrás los productos en Odoo, elegís qué cambiar y lo revisás en la misma tabla antes de aplicar.</p></div>
+          <span class="badge">SIN ARCHIVO</span>
+        </div>
+        <div class="campos">
+          <label>Categoría<select id="m-categoria"><option value="">Todas</option></select></label>
+          <label>Proveedor<select id="m-proveedor"><option value="">Todos</option></select></label>
+          <label>El nombre contiene<input id="m-texto" placeholder="por ejemplo: integral"></label>
+        </div>
+        <div class="campos">
+          <label>Campo a cambiar<select id="m-columna"></select></label>
+          <label>Operación<select id="m-operacion"></select></label>
+          <label id="m-valor-caja">Valor<input id="m-valor" placeholder="por ejemplo: 1.15"></label>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:18px;align-items:center;flex-wrap:wrap">
+          <button id="btn-masiva">Previsualizar cambios</button>
+          <span id="m-info"></span>
+        </div>
+        <div class="aviso">Elegí al menos un filtro. Se previsualiza por el mismo camino que un archivo: nada se escribe hasta que lo confirmes, y los productos que no cambian no aparecen.</div>
+      </div>
     </div>
 
     <div id="productos-preview" hidden>

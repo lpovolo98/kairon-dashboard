@@ -49,6 +49,7 @@ async function iniciar() {
       box.textContent = 'Falta configurar: ' + (st.missing || []).join(', ');
     }
     ESTADO.catalogo = await pedir('/api/productos/catalogo');
+    prepararMasiva();
   } catch (e) {
     $('#conexion').textContent = 'No se pudo conectar con el servicio. Revisá la configuración.';
   }
@@ -415,6 +416,87 @@ function pintarPendientes() {
     : '<p class="vacio">No hay productos pendientes. Cuando el agente administrativo encuentre un código que no existe, va a aparecer acá.</p>';
 }
 
+// ══════════════════════════════════════════════════════════
+//  MODIFICACIÓN MASIVA SIN ARCHIVO
+// ══════════════════════════════════════════════════════════
+
+// Qué operaciones tienen sentido según el tipo del campo: multiplicar un
+// nombre no significa nada.
+const OPERACIONES = {
+  fijar:       { texto: 'Fijar en',        tipos: ['texto', 'numero', 'm2o', 'm2m', 'booleano'] },
+  multiplicar: { texto: 'Multiplicar por', tipos: ['numero'] },
+  sumar:       { texto: 'Sumar',           tipos: ['numero'] },
+  reemplazar:  { texto: 'Buscar y reemplazar', tipos: ['texto'] },
+};
+
+function opciones(lista, incluirVacio) {
+  return (incluirVacio ? '<option value="">Todas</option>' : '')
+    + (lista || []).map(x => `<option>${esc(x.name || x.col)}</option>`).join('');
+}
+
+function prepararMasiva() {
+  const c = ESTADO.catalogo || {};
+  $('#m-categoria').innerHTML = '<option value="">Todas</option>' + opciones(c.categorias);
+  $('#m-proveedor').innerHTML = '<option value="">Todos</option>' + opciones(c.proveedores);
+  $('#m-columna').innerHTML = (c.columnas || []).map(x => `<option>${esc(x.col)}</option>`).join('');
+  $('#m-columna').addEventListener('change', pintarOperaciones);
+  $('#m-operacion').addEventListener('change', pintarValor);
+  pintarOperaciones();
+}
+
+function tipoDeColumna() {
+  const col = $('#m-columna').value;
+  return ((ESTADO.catalogo.columnas || []).find(x => x.col === col) || {}).tipo || 'texto';
+}
+
+function pintarOperaciones() {
+  const tipo = tipoDeColumna();
+  $('#m-operacion').innerHTML = Object.entries(OPERACIONES)
+    .filter(([, o]) => o.tipos.includes(tipo))
+    .map(([k, o]) => `<option value="${k}">${o.texto}</option>`).join('');
+  pintarValor();
+}
+
+function pintarValor() {
+  const op = $('#m-operacion').value;
+  $('#m-valor-caja').innerHTML = op === 'reemplazar'
+    ? 'Buscar / reemplazar por<div style="display:flex;gap:8px">'
+      + '<input id="m-valor" placeholder="texto viejo"><input id="m-valor2" placeholder="texto nuevo"></div>'
+    : 'Valor<input id="m-valor" placeholder="' + (op === 'multiplicar' ? '1.15 para un 15%' : '') + '">';
+}
+
+$('#btn-masiva').addEventListener('click', async () => {
+  const boton = $('#btn-masiva');
+  const filtros = {
+    categoria: $('#m-categoria').value, proveedor: $('#m-proveedor').value,
+    texto: $('#m-texto').value.trim(),
+  };
+  if (!filtros.categoria && !filtros.proveedor && !filtros.texto)
+    return alert('Elegí al menos un filtro: si no, se traerían todos los productos.');
+
+  const op = $('#m-operacion').value;
+  const valor = op === 'reemplazar'
+    ? [$('#m-valor').value, $('#m-valor2').value]
+    : $('#m-valor').value.trim();
+  if (op === 'reemplazar' ? !valor[0] : !valor) return alert('Falta el valor.');
+
+  boton.disabled = true; $('#m-info').textContent = 'Buscando en Odoo…';
+  try {
+    const r = await pedir('/api/productos/operacion', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...filtros, columna: $('#m-columna').value, operacion: op, valor }),
+    });
+    ESTADO.crudas = { productos: r.filas, proveedores: [], precios: [] };
+    ESTADO.filas = r.plan;
+    $('#m-info').textContent = '';
+    pintarTodo();
+  } catch (e) {
+    $('#m-info').textContent = e.message;
+  } finally {
+    boton.disabled = false;
+  }
+});
+
 // ── Eventos ───────────────────────────────────────────────
 function conectarDrop(zona, input, alSoltar) {
   ['dragenter', 'dragover'].forEach(e => zona.addEventListener(e, ev => {
@@ -434,8 +516,17 @@ conectarDrop($('#drop-productos'), $('#file-productos'), files => {
 
 $('#btn-leer-productos').addEventListener('click', async () => {
   const texto = $('#pegar-productos').value.trim();
-  if (!texto) return alert('Pegá las celdas desde Excel.');
-  previsualizar({ productos: leerTSV(texto), proveedores: [], precios: [] });
+  if (texto) return previsualizar({ productos: leerTSV(texto), proveedores: [], precios: [] });
+  const archivo = $('#file-productos').files[0];
+  if (!archivo) return alert('Subí un archivo o pegá las celdas desde Excel.');
+  try {
+    // El .xlsx lo lee el servidor: trae las tres hojas de una. Va como cuerpo
+    // crudo, igual que los PDF del agente administrativo.
+    previsualizar(await pedir(`/api/productos/leer?nombre=${encodeURIComponent(archivo.name)}`,
+                              { method: 'POST', body: archivo }));
+  } catch (e) {
+    alert('No se pudo leer el archivo: ' + e.message);
+  }
 });
 $('#btn-otro-archivo').addEventListener('click', () => {
   ESTADO.filas = { productos: [], proveedores: [], precios: [] };
@@ -450,6 +541,9 @@ $('#btn-otras-fotos').addEventListener('click', () => {
   $('#imagenes-board').hidden = true;
   $('#nombre-imagenes').textContent = 'Arrastrá las fotos acá';
   actualizarBarra();
+});
+$('#btn-plantilla').addEventListener('click', () => {
+  window.location = `${API}/api/productos/plantilla.xlsx`;
 });
 $('#buscar-productos').addEventListener('input', filtrarTexto);
 $('#btn-aplicar').addEventListener('click', async () => {
