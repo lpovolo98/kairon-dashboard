@@ -1262,6 +1262,194 @@ def refresh_all():
     ok_general = all(v == "ok" for v in resultados.values())
     return {"ok": ok_general, "refreshed_at": datetime.now().isoformat(), "detalle": resultados}
 
+# ─── Mapa de clientes ───────────────────────────────────────
+# Códigos de producto que representan un exhibidor. Si el cliente compró
+# alguno alguna vez, damos por hecho que lo tiene colocado.
+EXHIBIDOR_CODES = {"111", "112"}
+
+# Geo de los clientes (código, lat/lon, canal, zonas). Viene del maestro de
+# QuadMinds: es la fuente con coordenadas completas para los 806 puntos.
+# Odoo aporta la parte comercial y, si tiene coordenadas propias cargadas,
+# se prefieren esas.
+_GEO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "static", "data", "clientes_geo.json")
+_geo_cache = None
+
+def cargar_geo_clientes():
+    global _geo_cache
+    if _geo_cache is None:
+        with open(_GEO_PATH, "r", encoding="utf-8") as f:
+            _geo_cache = json.load(f)
+    return _geo_cache
+
+
+def _norm_cod(v):
+    """Normaliza un código de cliente para comparar entre Odoo y el maestro.
+    En Odoo es texto y puede venir con espacios o con .0 si alguna vez pasó
+    por una planilla; en el maestro es entero."""
+    if v is None or v is False:
+        return ""
+    s = str(v).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s.lstrip("0") or "0"
+
+
+def build_mapa_data(uid, models, meses_n=12):
+    """Cruza el maestro geo con la actividad comercial de Odoo.
+
+    El vínculo entre ambos lados es el código de cliente. En Odoo vive en
+    'ref' salvo que la instancia use un campo de Studio, así que se detecta
+    cuál de los candidatos existe realmente antes de pedirlo — pedir un
+    campo inexistente hace fallar todo el search_read."""
+    geo = cargar_geo_clientes()
+
+    # Qué campos de res.partner existen de verdad en esta instancia.
+    disponibles = set(models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "res.partner", "fields_get", [], {"attributes": ["type"]}).keys())
+
+    CAND_COD = ["ref", "x_studio_codigo", "x_studio_codigo_cliente", "x_studio_cod_cliente"]
+    campos_cod = [c for c in CAND_COD if c in disponibles]
+    campos_geo = [c for c in ("partner_latitude", "partner_longitude") if c in disponibles]
+
+    fields = ["id", "name", "user_id"] + campos_cod + campos_geo
+    for c in ("x_studio_canal", "x_studio_tipo_de_comercio"):
+        if c in disponibles:
+            fields.append(c)
+
+    partners = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "res.partner", "search_read",
+        [[["customer_rank", ">", 0], ["active", "=", True]]],
+        {"fields": fields, "limit": 20000}
+    )
+
+    # Índices para el cruce: por código y, como red, por nombre normalizado.
+    por_cod, por_nom = {}, {}
+    for p in partners:
+        for c in campos_cod:
+            k = _norm_cod(p.get(c))
+            if k and k not in por_cod:
+                por_cod[k] = p
+        n = (p.get("name") or "").strip().upper()
+        if n and n not in por_nom:
+            por_nom[n] = p
+
+    # Ventana de meses a analizar.
+    hoy = date.today()
+    primer_mes = (hoy.replace(day=1) - timedelta(days=31 * (meses_n - 1))).replace(day=1)
+    desde = primer_mes.strftime("%Y-%m-%d")
+
+    ordenes = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "sale.order", "search_read",
+        [[["state", "in", ["sale", "done"]], ["date_order", ">=", desde]]],
+        {"fields": ["id", "partner_id", "date_order"], "limit": 100000}
+    )
+    orden_info = {o["id"]: o for o in ordenes}
+
+    lineas = []
+    if ordenes:
+        lineas = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+            "sale.order.line", "search_read",
+            [[["order_id", "in", list(orden_info.keys())]]],
+            {"fields": ["order_id", "product_id", "price_subtotal", "product_uom_qty"],
+             "limit": 400000}
+        )
+
+    # Producto -> template (para el proveedor) y default_code (para exhibidor).
+    prod_ids = list({l["product_id"][0] for l in lineas if l.get("product_id")})
+    prod_info = {}
+    if prod_ids:
+        for p in models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+                "product.product", "search_read",
+                [[["id", "in", prod_ids]]],
+                {"fields": ["id", "default_code", "product_tmpl_id"], "limit": 50000}):
+            prod_info[p["id"]] = {
+                "code": (p.get("default_code") or "").strip(),
+                "tmpl": p["product_tmpl_id"][0] if p.get("product_tmpl_id") else None,
+            }
+    proveedores_map = get_proveedores_por_producto(models, uid)
+
+    # Agregación por partner y por mes.
+    acum = defaultdict(lambda: {"meses": defaultdict(lambda: {"fact": 0.0, "ops": set(), "provs": defaultdict(float)}),
+                                "exhibidor": False})
+    for l in lineas:
+        o = orden_info.get(l["order_id"][0] if l.get("order_id") else None)
+        if not o or not o.get("partner_id"):
+            continue
+        pid = o["partner_id"][0]
+        mes = o["date_order"][:7]
+        pi = prod_info.get(l["product_id"][0]) if l.get("product_id") else None
+        reg = acum[pid]
+        m = reg["meses"][mes]
+        m["fact"] += l.get("price_subtotal") or 0.0
+        m["ops"].add(o["id"])
+        if pi:
+            if pi["code"] in EXHIBIDOR_CODES:
+                reg["exhibidor"] = True
+            prov = proveedores_map.get(pi["tmpl"], "Sin proveedor")
+            m["provs"][prov] += l.get("price_subtotal") or 0.0
+
+    meses = sorted({o["date_order"][:7] for o in ordenes})
+    proveedores = sorted({p for r in acum.values() for m in r["meses"].values() for p in m["provs"]})
+
+    salida, matcheados = [], 0
+    for g in geo:
+        p = por_cod.get(_norm_cod(g["cod"])) or por_nom.get((g["nom"] or "").strip().upper())
+        item = {
+            "cod": g["cod"], "nom": g["nom"], "dir": g["dir"],
+            "canal": g["canal"], "lat": g["lat"], "lon": g["lon"],
+            "zonas": g["zonas"], "odoo_id": None, "vendedor": None,
+            "exhibidor": False, "meses": {},
+        }
+        if p:
+            matcheados += 1
+            item["odoo_id"] = p["id"]
+            item["vendedor"] = p["user_id"][1] if p.get("user_id") else None
+            # Si Odoo tiene coordenadas propias cargadas, mandan esas.
+            la, lo = p.get("partner_latitude"), p.get("partner_longitude")
+            if la and lo:
+                item["lat"], item["lon"] = round(la, 6), round(lo, 6)
+            if p.get("x_studio_canal"):
+                item["canal_odoo"] = p["x_studio_canal"]
+            reg = acum.get(p["id"])
+            if reg:
+                item["exhibidor"] = reg["exhibidor"]
+                item["meses"] = {
+                    mes: {"fact": round(v["fact"], 2), "ops": len(v["ops"]),
+                          "provs": {k: round(x, 2) for k, x in v["provs"].items()}}
+                    for mes, v in reg["meses"].items()
+                }
+        salida.append(item)
+
+    return {
+        "clientes": salida,
+        "meses": meses,
+        "proveedores": proveedores,
+        "diagnostico": {
+            "geo_total": len(geo),
+            "odoo_partners": len(partners),
+            "matcheados": matcheados,
+            "sin_match": len(geo) - matcheados,
+            "campos_codigo_detectados": campos_cod,
+            "coords_odoo_disponibles": bool(campos_geo),
+            "exhibidor_codes": sorted(EXHIBIDOR_CODES),
+        },
+    }
+
+
+@app.get("/api/mapa/clientes")
+def api_mapa_clientes(force: bool = False):
+    key = "mapa_clientes"
+    if not force:
+        cached = cache_get(key)
+        if cached:
+            return {"data": cached, "cached": True}
+    uid, models = odoo_connect()
+    data = build_mapa_data(uid, models)
+    cache_set(key, data)
+    return {"data": data, "cached": False}
+
+
 # ─── Serve frontend ─────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
