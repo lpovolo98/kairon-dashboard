@@ -1401,7 +1401,6 @@ def status():
             "PUBLIC_BASE_URL": bool(os.getenv("PUBLIC_BASE_URL", "")),
             "REPORTE_CRON_SECRET": bool(REPORTE_CRON_SECRET),
         },
-        "test_var_diagnostico": os.getenv("TEST_VAR", "NO_ENCONTRADA")
     }
 
 @app.get("/api/cobranzas")
