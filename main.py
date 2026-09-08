@@ -1283,10 +1283,14 @@ MENSAJE_DEFAULT = (
     "¿Te tomo algo?"
 )
 
+# Campo de res.partner que guarda el día de visita. En Kairon es un many2many
+# creado con Studio (un cliente puede tener más de un día: "Lunes y Jueves").
+# Se puede pisar por variable de entorno o cambiar desde la UI (paso 1).
+CAMPO_DIA_VISITA_DEFAULT = os.getenv(
+    "CAMPO_DIA_VISITA", "x_studio_many2many_field_4bq_1j6ma1s65")
+
 AGENTE_CONFIG_DEFAULT = {
-    # Nombre técnico del campo de res.partner que guarda el día de visita.
-    # Se define desde la UI con /api/agente/campos (paso "identificar campo").
-    "campo_dia_visita": "",
+    "campo_dia_visita": CAMPO_DIA_VISITA_DEFAULT,
     "mensaje": MENSAJE_DEFAULT,
     "seleccionados": [],   # ids de res.partner marcados para contactar
     "geo": {},             # {"<partner_id>": [lat, lon]} geocodificados acá
@@ -1302,6 +1306,8 @@ def cargar_agente_config():
                     cfg.update(json.load(f) or {})
             except Exception:
                 pass
+        if not (cfg.get("campo_dia_visita") or "").strip():
+            cfg["campo_dia_visita"] = CAMPO_DIA_VISITA_DEFAULT
         cfg["seleccionados"] = [int(x) for x in cfg.get("seleccionados", [])]
         cfg["geo"] = {str(k): v for k, v in (cfg.get("geo") or {}).items()}
         return cfg
@@ -1388,7 +1394,8 @@ def get_agente_campos():
         if tipo not in _TIPOS_AGRUPABLES:
             continue
         etiqueta = meta.get("string") or name
-        if not (_RX_DIA_VISITA.search(name) or _RX_DIA_VISITA.search(etiqueta)):
+        es_custom = name.startswith("x_")
+        if not (es_custom or _RX_DIA_VISITA.search(name) or _RX_DIA_VISITA.search(etiqueta)):
             continue
         candidatos.append({
             "name": name,
@@ -1396,7 +1403,7 @@ def get_agente_campos():
             "type": tipo,
             "relation": meta.get("relation") or "",
             "selection": [{"valor": v, "etiqueta": l} for v, l in (meta.get("selection") or [])],
-            "es_custom": name.startswith("x_"),
+            "es_custom": es_custom,
             "valores": [],
         })
 
@@ -1475,6 +1482,20 @@ def post_agente_seleccion(body: SeleccionBody):
 
 
 # ─── Clientes del agente ─────────────────────────────────────
+_ORDEN_SEMANA = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+
+
+def _orden_dia(dia):
+    """Lunes antes que Martes: ordenar alfabéticamente dejaría Jueves primero."""
+    d = (dia or "").strip().lower()
+    d = (d.replace("á", "a").replace("é", "e").replace("í", "i")
+          .replace("ó", "o").replace("ú", "u"))
+    for i, nombre in enumerate(_ORDEN_SEMANA):
+        if d.startswith(nombre[:4]):
+            return (0, i, d)
+    return (1, 0, d)
+
+
 def _dias_de_valor(valor, nombres_rel):
     """Normaliza el valor del campo día de visita a una lista de etiquetas,
     sirva el campo un solo día (selection/char/many2one) o varios (many2many)."""
@@ -1570,7 +1591,7 @@ def build_agente_clientes(uid, models):
     out = []
     for p in partners:
         pid = p["id"]
-        dias = _dias_de_valor(p.get(campo) if campo_ok else None, nombres_rel)
+        dias = sorted(_dias_de_valor(p.get(campo) if campo_ok else None, nombres_rel), key=_orden_dia)
         tel = _primer_telefono(p)
 
         lat = p.get("partner_latitude") or 0
@@ -1618,7 +1639,7 @@ def build_agente_clientes(uid, models):
 
     out.sort(key=lambda c: (-(c["monto_365d"] or 0), c["nombre"]))
 
-    dias_disponibles = sorted({d for c in out for d in c["dias_visita"]})
+    dias_disponibles = sorted({d for c in out for d in c["dias_visita"]}, key=_orden_dia)
     return {
         "clientes": out,
         "dias": dias_disponibles,
@@ -1715,7 +1736,8 @@ def _clientes_para_exportar(dias_filtro=None):
     if dias_filtro:
         pedidos = {d.strip().lower() for d in dias_filtro.split(",") if d.strip()}
         sel = [c for c in sel if {d.lower() for d in c["dias_visita"]} & pedidos]
-    sel.sort(key=lambda c: ((c["dias_visita"] or ["zzz"])[0].lower(), c["nombre"].lower()))
+    sel.sort(key=lambda c: (_orden_dia(c["dias_visita"][0]) if c["dias_visita"] else (2, 0, ""),
+                            c["nombre"].lower()))
     return sel, cfg
 
 
@@ -1753,7 +1775,7 @@ def get_agente_export(formato: str = "html", dias: str = None):
                 .replace('"', "&quot;"))
 
     bloques = []
-    for dia in sorted(por_dia):
+    for dia in sorted(por_dia, key=lambda d: _orden_dia(d.split(" / ")[0])):
         filas = []
         for c in por_dia[dia]:
             if c["telefono"]:

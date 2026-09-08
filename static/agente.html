@@ -126,15 +126,15 @@ textarea { width:100%; min-height:78px; resize:vertical; line-height:1.5; }
   <section class="panel" id="panelCampo">
     <h2><span class="paso">PASO 1</span> ¿En qué campo de Odoo está el día de visita?</h2>
     <p class="ayuda">
-      Odoo no trae un campo estándar de “día de visita”, así que suele estar en un campo custom
-      (<span class="mono">x_studio_…</span>) o en las etiquetas de contacto. Abajo están los campos de
-      <span class="mono">res.partner</span> que suenan a día / visita / ruta, con los valores que hoy tienen
-      cargados tus clientes. Elegí el que reconozcas y quedará guardado para todo el módulo.
+      Odoo no trae un campo estándar de “día de visita”: en Kairon está en un many2many de Studio,
+      que ya viene configurado. Si algún día cambia, tocá <b>Ver / cambiar el campo</b> y vas a ver todos
+      los campos de <span class="mono">res.partner</span> que podrían servir, con los valores que hoy
+      tienen cargados tus clientes para reconocer el correcto.
     </p>
     <div id="campoEstado" class="aviso info oculto"></div>
-    <div id="campos" class="cargando">Leyendo los campos de Odoo…</div>
+    <div id="campos" class="oculto"></div>
     <div class="acciones" style="margin-top:14px">
-      <button class="btn" id="btnRecargarCampos">Volver a leer los campos</button>
+      <button class="btn" id="btnRecargarCampos">Ver / cambiar el campo</button>
       <span class="valores" id="campoActual"></span>
     </div>
   </section>
@@ -225,6 +225,7 @@ const plata = n => (n || 0).toLocaleString('es-AR', {maximumFractionDigits:0});
 // ── Paso 1: campos ────────────────────────────────────────
 async function cargarCampos() {
   const cont = $('#campos');
+  cont.classList.remove('oculto');
   cont.className = 'cargando';
   cont.textContent = 'Leyendo los campos de Odoo…';
   try {
@@ -494,7 +495,16 @@ function exportar(formato) {
 $('#buscar').addEventListener('input', render);
 $('#fEstado').addEventListener('change', render);
 $('#fOrden').addEventListener('change', render);
-$('#btnRecargarCampos').addEventListener('click', cargarCampos);
+$('#btnRecargarCampos').addEventListener('click', () => {
+  const cont = $('#campos');
+  if (!cont.classList.contains('oculto') && cont.innerHTML.trim()) {
+    cont.classList.add('oculto');           // segundo click: plegar
+    $('#btnRecargarCampos').textContent = 'Ver / cambiar el campo';
+  } else {
+    $('#btnRecargarCampos').textContent = 'Ocultar los campos';
+    cargarCampos();
+  }
+});
 $('#btnRefrescar').addEventListener('click', () => cargarClientes(true));
 $('#btnMarcarVisibles').addEventListener('click', () => {
   visibles().forEach(c => SEL.add(c.id)); guardarSeleccion(); render();
@@ -525,8 +535,7 @@ $('#btnGeo').addEventListener('click', async () => {
 });
 
 iniciarMapa();
-cargarCampos();
-cargarClientes(false);
+cargarClientes(false);   // los campos de Odoo se leen solo si los pedís (es una consulta pesada)
 </script>
 </body>
 </html>

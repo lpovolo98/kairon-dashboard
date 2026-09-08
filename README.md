@@ -16,7 +16,10 @@ Dashboard web con 3 módulos conectado en tiempo real a Odoo Cloud.
 Primera etapa del agente que contacta clientes: **no es autónomo**, arma la lista y
 deja los links listos para escribir uno por uno.
 
-1. **Identificar el campo del día de visita.** Odoo no trae un campo estándar para esto,
+1. **Campo del día de visita.** En Kairon es el many2many de Studio
+   `x_studio_many2many_field_4bq_1j6ma1s65` (un cliente puede tener más de un día),
+   ya configurado por defecto y pisable con la variable de entorno `CAMPO_DIA_VISITA`.
+   Si alguna vez cambia, la pantalla lo deja re-elegir: Odoo no trae un campo estándar para esto,
    así que la pantalla lista los campos de `res.partner` que suenan a día / visita / ruta
    (incluidos los `x_studio_*` de Studio y las etiquetas de contacto `category_id`),
    con los valores que hoy tienen cargados los clientes y cuántos hay en cada uno.
