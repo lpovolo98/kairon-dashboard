@@ -9,6 +9,7 @@ const ESTADO = {
   hoja: 'productos',
   catalogo: null,        // categorias, unidades, impuestos, listas, proveedores
   filas: { productos: [], proveedores: [], precios: [] },
+  crudas: { productos: [], proveedores: [], precios: [] },
   fotos: [],             // {archivo, dataUrl, pesoOriginal, pesoFinal, sku, origen}
   sinFoto: [],
   pendientes: [],
@@ -82,13 +83,29 @@ function leerTSV(texto) {
   });
 }
 
-async function previsualizar(filasCrudas) {
-  const r = await pedir('/api/productos/previsualizar', {
+async function previsualizar(hojas) {
+  // Se guardan las filas crudas: al aplicar se vuelven a mandar y el servidor
+  // recalcula todo. El navegador nunca manda una escritura.
+  ESTADO.crudas = hojas;
+  ESTADO.filas = await pedir('/api/productos/previsualizar', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ hoja: 'productos', filas: filasCrudas }),
+    body: JSON.stringify(hojas),
   });
-  ESTADO.filas = r;
   pintarTodo();
+}
+
+/* Las ediciones en la tabla vuelven a la fila cruda y se re-previsualiza:
+   el estado, el diff y los errores los recalcula siempre el servidor. */
+async function reprevisualizar() {
+  $$('#tabla-productos tbody tr').forEach(tr => {
+    const fila = ESTADO.crudas.productos[+tr.dataset.i];
+    if (!fila) return;
+    tr.querySelectorAll('[data-col]').forEach(td => {
+      const control = td.querySelector('.celda-edit');
+      if (control) fila[td.dataset.col] = control.value;
+    });
+  });
+  await previsualizar(ESTADO.crudas);
 }
 
 function pintarTodo() {
@@ -153,6 +170,8 @@ function pintarPreview(hoja) {
       ${columnas.map(col => `<td data-col="${esc(col)}">${celda(f, col)}</td>`).join('')}
     </tr>`).join('');
 
+  $$('#tabla-productos .celda-edit').forEach(el =>
+    el.addEventListener('change', reprevisualizar));
   filtrarTexto();
 }
 
@@ -415,12 +434,9 @@ conectarDrop($('#drop-productos'), $('#file-productos'), files => {
 
 $('#btn-leer-productos').addEventListener('click', async () => {
   const texto = $('#pegar-productos').value.trim();
-  if (texto) return previsualizar(leerTSV(texto));
-  const f = $('#file-productos').files[0];
-  if (f) { const fd = new FormData(); fd.append('archivo', f); return previsualizar(await pedir('/api/productos/leer', { method: 'POST', body: fd })); }
-  alert('Subí un archivo o pegá las celdas desde Excel.');
+  if (!texto) return alert('Pegá las celdas desde Excel.');
+  previsualizar({ productos: leerTSV(texto), proveedores: [], precios: [] });
 });
-$('#btn-demo-productos').addEventListener('click', () => previsualizar(null));
 $('#btn-otro-archivo').addEventListener('click', () => {
   ESTADO.filas = { productos: [], proveedores: [], precios: [] };
   ESTADO.filtro = null;
@@ -436,6 +452,48 @@ $('#btn-otras-fotos').addEventListener('click', () => {
   actualizarBarra();
 });
 $('#buscar-productos').addEventListener('input', filtrarTexto);
+$('#btn-aplicar').addEventListener('click', async () => {
+  const boton = $('#btn-aplicar');
+  const textoOriginal = boton.textContent;
+  boton.disabled = true; boton.textContent = 'Aplicando…';
+  try {
+    const r = ESTADO.hoja === 'imagenes'
+      ? await pedir('/api/productos/imagenes', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ asignaciones: ESTADO.fotos.filter(f => f.sku)
+            .map(f => ({ sku: f.sku, imagen: f.dataUrl })) }) })
+      : await pedir('/api/productos/aplicar', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(ESTADO.crudas) });
+    mostrarResultado(r);
+  } catch (e) {
+    boton.disabled = false; boton.textContent = textoOriginal;
+    alert('No se pudo aplicar: ' + e.message);
+  }
+});
+
+function mostrarResultado(r) {
+  const n = (r.creados || r.subidas || []).length;
+  const m = (r.modificados || []).length;
+  $('#accionbar').classList.remove('visible');
+  const caja = document.createElement('div');
+  caja.className = 'card';
+  caja.style.marginTop = '20px';
+  caja.innerHTML = `
+    <div class="section-head"><div>
+      <h2>Listo</h2>
+      <p>Se ${r.subidas ? 'subieron' : 'crearon'} <b>${n}</b>${m ? ` y se modificaron <b>${m}</b>` : ''} registro${n + m === 1 ? '' : 's'}.
+      ${(r.errores || []).length ? `<span style="color:var(--red)">${r.errores.length} con problemas.</span>` : ''}</p>
+    </div><button class="fantasma" id="btn-revertir">Revertir esta corrida</button></div>
+    ${(r.errores || []).map(e => `<p class="err">${esc(e)}</p>`).join('')}`;
+  $('#panel-' + (ESTADO.hoja === 'imagenes' ? 'imagenes' : 'productos')).prepend(caja);
+  $('#btn-revertir').addEventListener('click', async () => {
+    if (!confirm('Se van a devolver los campos modificados a su valor anterior y a archivar lo creado. ¿Seguir?')) return;
+    await pedir(`/api/productos/corridas/${r.id}/revertir`, { method: 'POST' });
+    location.reload();
+  });
+}
+
 $('#btn-cancelar').addEventListener('click', () => {
   (ESTADO.hoja === 'imagenes' ? $('#btn-otras-fotos') : $('#btn-otro-archivo')).click();
 });

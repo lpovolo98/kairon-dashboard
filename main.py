@@ -21,6 +21,8 @@ load_dotenv()
 app = FastAPI(title="Odoo Dashboard API")
 from administracion.api import router as administracion_router
 app.include_router(administracion_router)
+from productos.api import router as productos_router
+app.include_router(productos_router)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ─── Odoo config ────────────────────────────────────────────
