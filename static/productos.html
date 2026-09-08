@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agente de productos — Kairon</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/productos.css"></head>
+<body>
+
+<aside>
+  <a class="marca" href="/"><img src="/static/kairon_logo.png" alt=""><span>Kairon</span></a>
+  <nav aria-label="Navegación principal">
+    <p class="grupo">Aplicaciones</p>
+    <a class="item" href="/">⌂ <span>Portal</span></a>
+    <a class="item" href="/dashboard">▦ <span>Dashboard comercial</span></a>
+    <a class="item" href="/agente">◌ <span>Agente de ventas</span></a>
+    <a class="item" href="/administracion">▤ <span>Agente administrativo</span></a>
+    <a class="item activo" href="/productos" aria-current="page">◈ <span>Agente de productos</span></a>
+    <div class="sep"></div>
+    <p class="grupo">Accesos externos</p>
+    <a class="item" href="https://kairon.odoo.com" target="_blank" rel="noopener">↗ <span>Odoo</span></a>
+  </nav>
+  <div class="pie">
+    <a class="item" href="/cdn-cgi/access/logout">↪ <span>Salir</span></a>
+    <p class="copy">© 2026 kaironsrl.com.ar</p>
+  </div>
+</aside>
+
+<main>
+  <header class="bienvenida">
+    <p class="eyebrow">CATÁLOGO / ABM DE PRODUCTOS</p>
+    <h1>Agente de productos</h1>
+    <p>Altas y modificaciones masivas en Odoo. Nada se escribe hasta que lo confirmás.</p>
+  </header>
+
+  <div class="status" id="conexion" role="status">Comprobando disponibilidad…</div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab activa" data-tab="productos" role="tab">Productos <span class="n" id="n-productos">0</span></button>
+    <button class="tab" data-tab="proveedores" role="tab">Proveedores <span class="n" id="n-proveedores">0</span></button>
+    <button class="tab" data-tab="precios" role="tab">Precios <span class="n" id="n-precios">0</span></button>
+    <button class="tab" data-tab="imagenes" role="tab">Imágenes <span class="n" id="n-imagenes">0</span></button>
+    <button class="tab" data-tab="pendientes" role="tab">Pendientes <span class="n" id="n-pendientes">0</span></button>
+  </div>
+
+  <!-- ══════════════ PRODUCTOS ══════════════ -->
+  <section class="panel activo" id="panel-productos">
+
+    <div id="productos-entrada">
+      <div class="entrada">
+        <div class="card">
+          <div class="section-head">
+            <div><h2>Cargar productos</h2>
+            <p>Subí la plantilla, o pegá las celdas directo desde Excel. El agente cruza cada fila contra Odoo antes de escribir nada.</p></div>
+            <span class="badge">EXCEL → ODOO</span>
+          </div>
+          <label class="drop" id="drop-productos" for="file-productos">
+            <span class="file-icon" aria-hidden="true">↑</span>
+            <strong id="nombre-productos">Arrastrá tu plantilla acá</strong>
+            <span>o seleccioná un archivo de tu equipo</span>
+            <small>.xlsx con las hojas Productos, Proveedores y Precios · .csv de una sola hoja</small>
+            <input type="file" id="file-productos" accept=".xlsx,.csv">
+          </label>
+          <p class="o">— O PEGAR DESDE EXCEL —</p>
+          <textarea class="pegar" id="pegar-productos" placeholder="Copiá las celdas en Excel y pegá acá (Ctrl+V). La primera fila tiene que ser el encabezado."></textarea>
+          <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+            <button id="btn-leer-productos">Previsualizar</button>
+            <button class="secundario" id="btn-demo-productos">Ver con datos de ejemplo</button>
+            <button class="fantasma" id="btn-plantilla">Descargar plantilla</button>
+          </div>
+        </div>
+
+        <div class="card lateral">
+          <p class="eyebrow">CÓMO TRABAJA</p>
+          <h3>Previsualizar, después escribir</h3>
+          <ul>
+            <li>Resuelve categorías, unidades, impuestos y proveedores contra Odoo. Si un nombre no existe, te ofrece los válidos en un desplegable.</li>
+            <li>Compara cada fila con el producto real: separa <b>altas</b> de <b>modificaciones</b>, y no toca las que no cambian.</li>
+            <li>Busca el SKU tolerando espacios y mayúsculas, para no crear duplicados de códigos que ya existen.</li>
+            <li>Toda corrida queda registrada y se puede revertir.</li>
+          </ul>
+          <div class="aviso">Los valores fijos de Kairon —<b>producto almacenable</b>, <b>facturar por cantidad ordenada</b>, <b>se puede vender y comprar</b>— vienen aplicados por defecto y se pueden cambiar por fila.</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="productos-preview" hidden>
+      <div class="resumen" id="resumen-productos"></div>
+      <div class="filtros">
+        <input type="search" id="buscar-productos" placeholder="Buscar por SKU o nombre…">
+        <button class="fantasma chico" id="btn-otro-archivo">Cargar otro archivo</button>
+      </div>
+      <div class="tabla-wrap"><table id="tabla-productos"><thead></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ PROVEEDORES ══════════════ -->
+  <section class="panel" id="panel-proveedores">
+    <div class="card">
+      <div class="section-head">
+        <div><h2>Vínculos con proveedores</h2>
+        <p>El código con el que cada proveedor identifica el producto. Sin esto, el agente administrativo no puede mapear las líneas de su factura.</p></div>
+        <span class="badge">product.supplierinfo</span>
+      </div>
+      <div id="proveedores-cuerpo"><p class="vacio">Cargá la plantilla en la pestaña Productos: la hoja «Proveedores» se lee junto con el resto.</p></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ PRECIOS ══════════════ -->
+  <section class="panel" id="panel-precios">
+    <div class="card">
+      <div class="section-head">
+        <div><h2>Reglas de lista de precios</h2>
+        <p>Precio fijo por producto en una lista. Si la regla ya existe se actualiza; si no, se crea.</p></div>
+        <span class="badge">product.pricelist.item</span>
+      </div>
+      <div id="precios-cuerpo"><p class="vacio">Cargá la plantilla en la pestaña Productos: la hoja «Precios» se lee junto con el resto.</p></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ IMÁGENES ══════════════ -->
+  <section class="panel" id="panel-imagenes">
+    <div id="imagenes-entrada">
+      <div class="entrada">
+        <div class="card">
+          <div class="section-head">
+            <div><h2>Fotos de producto</h2>
+            <p>Soltá todas las fotos juntas, con el nombre que tengan. Se achican en tu computadora antes de subir y el agente propone a qué producto va cada una.</p></div>
+            <span class="badge">→ image_1920</span>
+          </div>
+          <label class="drop" id="drop-imagenes" for="file-imagenes">
+            <span class="file-icon" aria-hidden="true">▣</span>
+            <strong id="nombre-imagenes">Arrastrá las fotos acá</strong>
+            <span>podés soltar la carpeta entera</span>
+            <small>JPG · PNG · WEBP — se redimensionan a 1600 px antes de salir de tu equipo</small>
+            <input type="file" id="file-imagenes" accept="image/*" multiple>
+          </label>
+          <div class="aviso">Nada se sube en tamaño original. Una foto de 27 MB viaja como ~300 KB: se procesa acá, en el navegador, igual que hacía <b>achicar_imagenes.py</b>.</div>
+        </div>
+        <div class="card lateral">
+          <p class="eyebrow">CÓMO ASIGNA</p>
+          <h3>Sin editar ningún archivo</h3>
+          <ul>
+            <li>Si el nombre del archivo <b>contiene un SKU</b>, queda asignada sola.</li>
+            <li>Si se <b>parece al nombre</b> de un producto, la propone y vos confirmás.</li>
+            <li>Si no reconoce nada, la dejás para el tablero: click en la foto, click en el producto.</li>
+          </ul>
+          <div class="aviso">La lista de productos sin foto sale de Odoo en el momento. Ya no hay que mantener a mano el <b>MAPEO</b> ni el <b>SIN_IMAGEN</b>.</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="imagenes-board" hidden>
+      <div class="resumen" id="resumen-imagenes"></div>
+      <div class="dos-columnas">
+        <div class="card">
+          <div class="section-head">
+            <div><h2>Fotos cargadas</h2><p>Click en una foto sin asignar y después en un producto de la derecha.</p></div>
+            <button class="fantasma chico" id="btn-otras-fotos">Cargar otras fotos</button>
+          </div>
+          <div class="img-grid" id="grid-imagenes"></div>
+        </div>
+        <div class="card">
+          <div class="section-head"><div><h2>Sin foto en Odoo</h2><p id="sub-sin-foto"></p></div></div>
+          <div class="sin-foto" id="lista-sin-foto"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ PENDIENTES ══════════════ -->
+  <section class="panel" id="panel-pendientes">
+    <div class="card">
+      <div class="section-head">
+        <div><h2>Pedidos del agente administrativo</h2>
+        <p>Productos que aparecieron en una factura de proveedor y todavía no existen en Odoo. Completalos y dales de alta para que la factura pueda seguir.</p></div>
+        <span class="badge">COLA COMPARTIDA</span>
+      </div>
+      <div id="pendientes-cuerpo"></div>
+    </div>
+  </section>
+</main>
+
+<div class="accionbar" id="accionbar">
+  <p id="accionbar-texto"></p>
+  <div class="acciones">
+    <button class="fantasma" id="btn-cancelar">Descartar</button>
+    <button id="btn-aplicar">Aplicar</button>
+  </div>
+</div>
+
+<script src="/static/productos.js"></script>
+</body></html>
