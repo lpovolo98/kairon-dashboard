@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agente administrativo — Kairon</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/administracion.css"></head>
+<body>
+<aside><a class="marca" href="/"><img src="/static/kairon_logo.png" alt=""><span>Kairon</span></a>
+<nav aria-label="Navegación principal"><p class="grupo">Aplicaciones</p>
+<a class="item" href="/">⌂ <span>Portal</span></a>
+<a class="item" href="/dashboard">▦ <span>Dashboard comercial</span></a>
+<a class="item" href="/agente">◌ <span>Agente de ventas</span></a>
+<a class="item activo" href="/administracion" aria-current="page">▤ <span>Agente administrativo</span></a>
+<div class="sep"></div><p class="grupo">Accesos externos</p>
+<a class="item" href="https://kairon.odoo.com" target="_blank" rel="noopener">↗ <span>Odoo</span></a></nav>
+<div class="pie"><a class="item" href="/cdn-cgi/access/logout">↪ <span>Salir</span></a><p class="copy">© 2026 kaironsrl.com.ar</p></div></aside>
+<main><header class="bienvenida"><p class="eyebrow">ADMINISTRACIÓN / COMPRAS</p>
+<h1>Agente administrativo</h1><p>De la factura a Odoo, sin cargar cada dato a mano.</p></header>
+<div class="status" id="connection" role="status">Comprobando disponibilidad…</div>
+<section class="workspace"><div class="card"><div class="section-head"><div><h2>Ingresar una factura</h2><p>Subí el PDF del proveedor. El agente se encarga del resto.</p></div><span class="badge">PDF → ODOO</span></div>
+<form id="upload"><label class="drop" id="drop" for="pdf"><span class="file-icon" aria-hidden="true">↑</span><strong id="filename">Arrastrá tu factura acá</strong><span>o seleccioná un archivo de tu equipo</span><small>Un comprobante por PDF · Hasta 15 MB y 20 páginas</small><input type="file" id="pdf" accept="application/pdf,.pdf" required></label>
+<div class="action"><p>Se creará la compra con recepción pendiente y la factura vinculada en borrador. Si falta el proveedor, se creará con los datos del comprobante.</p><button id="submit" disabled>Crear compra y factura <span aria-hidden="true">↗</span></button></div></form>
+<p id="notice" role="status" aria-live="polite"></p></div>
+<div class="card steps"><p class="eyebrow">ASÍ TRABAJA TU AGENTE</p><ol><li><b>Lee el comprobante</b><p>Identifica proveedor, productos, cantidades e importes.</p></li><li><b>Controla los datos</b><p>Revisa duplicados, precios, unidades e impuestos.</p></li><li><b>Crea la compra y la factura</b><p>Genera la recepción pendiente y adjunta el PDF a la factura vinculada en borrador.</p></li></ol><div class="hint">La recepción queda pendiente para ingresar el stock. La factura queda en borrador para su revisión.</div></div></section>
+<section class="card history"><div class="section-head"><div><h2>Últimas facturas</h2><p>Seguí el resultado de cada carga.</p></div><button class="secondary" id="refresh">Actualizar</button></div><div id="history" aria-live="polite"><p class="empty">Todavía no hay facturas para mostrar.</p></div></section>
+<details id="access"><summary>Acceso alternativo de administración</summary><form id="login"><label for="token">Clave de acceso</label><input id="token" type="password" autocomplete="off"><button>Ingresar</button></form></details>
+</main><script src="/static/administracion.js"></script></body></html>

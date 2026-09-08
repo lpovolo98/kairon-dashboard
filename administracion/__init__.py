@@ -1,0 +1,1 @@
+"""Agente administrativo de Kairon."""

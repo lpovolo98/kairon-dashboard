@@ -1,0 +1,68 @@
+{
+  "_nota": "Corregido a mano el 27/08/2026 sobre lo que devolvió descubrir.py. Ver salidas/descubrimiento.txt para los IDs.",
+  "diarios": {
+    "fiscal": {
+      "id": 10,
+      "nombre": "Purchases",
+      "_por_que": "código BILL, tipo purchase. descubrir.py había puesto acá el 22 (Compras Interno), que es el otro. OJO: l10n_latam_use_documents = False, así que hoy la factura NO recibe tipo de documento ni numeración fiscal."
+    },
+    "interno": {
+      "id": 22,
+      "nombre": "Compras Interno",
+      "_por_que": "código BILL1. Es el de los comprobantes sin validez fiscal (guías letra X)."
+    }
+  },
+  "impuestos": {
+    "iva_21": {
+      "id": 67,
+      "nombre": "VAT 21%",
+      "alicuota": 21.0
+    },
+    "iva_10_5": {
+      "id": 65,
+      "nombre": "VAT 10.5%",
+      "alicuota": 10.5
+    },
+    "iva_0": {
+      "id": 175,
+      "nombre": "0% EXEMPT",
+      "alicuota": 0.0
+    },
+    "percepcion_iva": {
+      "id": 74,
+      "nombre": "[old] Perc VAT",
+      "alicuota": 3.0,
+      "_por_que": "Elegido el 27/08/2026. Es el unico impuesto de compra del grupo VAT Perception que calcula 3% percent y esta activo. El [176] 'Perc VAT' es 1.0 fixed y no sirve. El '[old]' viene del renombre de la localizacion argentina, no significa que este roto: sobre el neto de 584.983,86 da 17.549,52, que es exactamente lo que imprime la factura."
+    },
+    "percepcion_iibb": null
+  },
+  "tipos_documento": {
+    "factura_a": {
+      "id": 1,
+      "nombre": "INVOICES A"
+    },
+    "factura_b": {
+      "id": 6,
+      "nombre": "INVOICES B"
+    },
+    "factura_c": {
+      "id": 11,
+      "nombre": "INVOICES C"
+    }
+  },
+  "picking_type_entrada": 1,
+  "campo_factor_uom": "factor",
+  "campo_codigo_proveedor": "product_code",
+  "control_precios": {
+    "tolerancia_pct": 0.0,
+    "comparar_contra": [
+      "ultimo_precio_compra",
+      "supplierinfo",
+      "orden_de_compra"
+    ],
+    "piso_absoluto": 0.05,
+    "_piso_por_que": "La tolerancia sigue siendo 0%. El piso solo evita que una diferencia de redondeo de centavos se reporte como cambio de precio."
+  },
+  "unidad_de_carga": "bulto",
+  "_unidad_de_carga_por_que": "Decidido el 27/08/2026. Las 72 facturas de Nutregal ya cargadas a mano usan cajas (12 lineas a $ 26.360, no 192 a $ 1.647,50), asi que el agente hace lo mismo para no romper la continuidad del historial de precios de compra. OJO: la UdM de los productos Murken en Odoo es 'Units' factor 1, asi que la cantidad queda expresada en Units pero significa cajas. Es la convencion existente, no un error nuevo. El otro valor posible es 'udm_producto', que respeta la UdM y cargaria 192 unidades."
+}

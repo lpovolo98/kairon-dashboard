@@ -1,0 +1,65 @@
+{
+  "_origen": "FA000300000018  KAIRON.pdf",
+  "_nota": "Factura A con CAE, IVA discriminado y percepción de IVA RG 5329. Va al diario fiscal.",
+
+  "proveedor": {
+    "nombre": "ALIMENTOS ARGENTINOS NUTREGAL SA",
+    "cuit": "30-71849589-6"
+  },
+
+  "comprobante": {
+    "clase": "fiscal",
+    "tipo": "FACTURA",
+    "letra": "A",
+    "codigo_afip": "1",
+    "numero": "0003-00000018",
+    "fecha": "2026-08-03",
+    "condicion_venta": "CTA CTE 21 DIAS",
+    "fecha_vencimiento": "2026-08-24",
+    "cae": "86316703254138",
+    "cae_vencimiento": "2026-08-13",
+    "moneda": "ARS"
+  },
+
+  "lineas": [
+    {
+      "codigo_proveedor": "201700703",
+      "descripcion": "Murken Crema Ciboulette 115GRX16",
+      "bultos": 12,
+      "unidades_por_bulto": 16,
+      "cantidad_unidades": 192,
+      "precio_unitario": 1647.503,
+      "alicuota_iva": 21,
+      "subtotal": 316320.61
+    },
+    {
+      "codigo_proveedor": "201700706",
+      "descripcion": "Murken Clásicas Corte Americano 80GRX16",
+      "bultos": 8,
+      "unidades_por_bulto": 16,
+      "cantidad_unidades": 128,
+      "precio_unitario": 1199.390,
+      "alicuota_iva": 21,
+      "subtotal": 153521.86
+    },
+    {
+      "codigo_proveedor": "201700705",
+      "descripcion": "Murken Clásicas Corte Liso 80GRX16",
+      "bultos": 6,
+      "unidades_por_bulto": 16,
+      "cantidad_unidades": 96,
+      "precio_unitario": 1199.390,
+      "alicuota_iva": 21,
+      "subtotal": 115141.39
+    }
+  ],
+
+  "totales": {
+    "neto": 584983.86,
+    "iva": 122846.61,
+    "percepciones": [
+      { "detalle": "PERC. IVA RG 5329 3%", "alicuota": 3, "importe": 17549.52 }
+    ],
+    "total": 725379.99
+  }
+}

@@ -7,3 +7,5 @@ objetivos.json
 
 # Config local del agente de ventas (en producción vive en el volumen /data)
 agente_config.json
+administracion-data/
+.test-deps/

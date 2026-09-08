@@ -21,6 +21,8 @@ import unicodedata
 load_dotenv()
 
 app = FastAPI(title="Odoo Dashboard API")
+from administracion.api import router as administracion_router
+app.include_router(administracion_router)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ─── Odoo config ────────────────────────────────────────────
@@ -1346,6 +1348,12 @@ def trigger_reporte_diario(secret: str = "", vendedor: str = "JK"):
 def status():
     return {
         "ok": True,
+        "administracion": {
+            "version": "2026-09-08.1",
+            "modo": "compra-confirmada-factura-borrador",
+            "odoo_configurado": bool(ODOO_URL and ODOO_DB and ODOO_USER and ODOO_PASS),
+            "volumen_datos": os.path.ismount("/data"),
+        },
         "odoo_url": ODOO_URL,
         "cache_ttl": CACHE_TTL,
         "cached_keys": list(_cache.keys()),
