@@ -248,7 +248,7 @@ class Credenciales(unittest.TestCase):
         r, creado, fabrica = self._construir({
             "ODOO_URL": "https://kairon.odoo.com", "ODOO_DB": "kairon",
             "ODOO_USER": "lucas", "ODOO_PASSWORD": "secreto"})
-        self.assertIs(r, creado)
+        self.assertIs(r._odoo, creado, "el cliente sale envuelto para traducir errores")
         self.assertEqual(fabrica.call_args.kwargs["clave"], "secreto")
 
     def test_odoo_key_tiene_prioridad_si_estan_las_dos(self):
@@ -275,3 +275,47 @@ class Credenciales(unittest.TestCase):
         from productos import api
         self.assertNotIn("desde_config", api._odoo.__code__.co_names)
         self.assertIn("ODOO_PASSWORD", api._odoo.__code__.co_consts)
+
+
+class ErroresDeOdoo(unittest.TestCase):
+    """Un fallo de Odoo tiene que llegar al navegador con su mensaje, no como
+    un «Internal Server Error» que no dice nada."""
+
+    def _cliente_que_falla(self, solo=None):
+        from administracion.odoo import OdooError
+        from productos.api import ClienteHTTP
+
+        class Falla:
+            def call(self, modelo, metodo, args, kwargs=None):
+                if solo is None or modelo == solo:
+                    raise OdooError(f"{modelo}.{metodo} falló: campo inexistente")
+                return []
+        return ClienteHTTP(Falla())
+
+    def test_un_error_de_odoo_es_502_con_mensaje(self):
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as ctx:
+            self._cliente_que_falla().call("product.category", "search_read", [[]])
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("campo inexistente", ctx.exception.detail)
+
+    def test_una_lista_rota_no_tira_abajo_el_catalogo(self):
+        from productos.api import _catalogo
+        c = _catalogo(self._cliente_que_falla(solo="uom.uom"))
+        self.assertEqual(c["unidades"], [])
+        self.assertTrue(any("uom.uom" in a for a in c["avisos"]))
+        self.assertIn("categorias", c)
+        self.assertTrue(c["columnas"], "las columnas no dependen de Odoo")
+
+    def test_el_catalogo_ordena_sin_pedirselo_a_odoo(self):
+        """Ordenar por display_name, que es calculado y no almacenado, es
+        justamente lo que hacía fallar la consulta."""
+        from productos.api import _catalogo
+
+        class Devuelve:
+            def call(self, modelo, metodo, args, kwargs=None):
+                assert "order" not in (kwargs or {}), "no se le debe pedir el orden a Odoo"
+                return [{"id": 2, "display_name": "Zeta"}, {"id": 1, "display_name": "alfa"}]
+        c = _catalogo(Devuelve())
+        self.assertEqual([x["name"] for x in c["categorias"]], ["alfa", "Zeta"])
+        self.assertEqual(c["avisos"], [])

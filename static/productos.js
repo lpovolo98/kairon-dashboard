@@ -61,6 +61,14 @@ async function iniciar() {
     }
     ESTADO.catalogo = await pedir('/api/productos/catalogo');
     prepararMasiva();
+    // Si una lista de Odoo no se pudo leer, se avisa cuál: el resto de la
+    // pantalla sigue funcionando, pero ese desplegable va a estar vacío.
+    const avisos = ESTADO.catalogo.avisos || [];
+    if (avisos.length) {
+      box.className = 'status';
+      box.innerHTML = `Conectado a Odoo, pero ${avisos.length} lista(s) no se pudieron leer:`
+        + avisos.map(a => `<br><code>${esc(a)}</code>`).join('');
+    }
   } catch (e) {
     $('#conexion').textContent = e.message || 'No se pudo conectar con el servicio.';
   }

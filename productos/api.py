@@ -72,6 +72,28 @@ def autorizar(request: Request):
     return email
 
 
+class ClienteHTTP:
+    """Traduce los errores de Odoo a respuestas con mensaje.
+
+    Todo lo que hace este módulo pasa por .call(), así que envolverlo una vez
+    alcanza para que ningún fallo de Odoo llegue al navegador como un
+    "Internal Server Error" sin explicación.
+    """
+
+    def __init__(self, odoo):
+        self._odoo = odoo
+
+    def call(self, modelo, metodo, args, kwargs=None):
+        from administracion.odoo import OdooError
+        try:
+            return self._odoo.call(modelo, metodo, args, kwargs)
+        except OdooError as e:
+            raise HTTPException(502, f"Odoo rechazó la consulta: {e}")
+
+    def __getattr__(self, nombre):
+        return getattr(self._odoo, nombre)
+
+
 def _odoo():
     """Cliente de Odoo con las mismas credenciales que usa el dashboard.
 
@@ -88,7 +110,7 @@ def _odoo():
         raise HTTPException(503, "Faltan credenciales de Odoo: " + ", ".join(
             "ODOO_PASSWORD" if f == "CLAVE" else "ODOO_" + f for f in faltan))
     try:
-        return Odoo(**datos)
+        return ClienteHTTP(Odoo(**datos))
     except OdooError as e:
         raise HTTPException(503, str(e))
 
@@ -122,10 +144,25 @@ def _catalogo(o):
     """Los valores válidos de cada desplegable, tal como están hoy en Odoo.
     Es lo que hacía descubrir_catalogo.py. Lo usan la pantalla y la plantilla
     que se descarga."""
+    avisos = []
+
     def leer(modelo, dominio=None, limite=400):
-        filas = o.call(modelo, "search_read", [dominio or []],
-                       {"fields": ["display_name"], "limit": limite, "order": "display_name"})
-        return [{"id": f["id"], "name": f["display_name"]} for f in filas]
+        # Sin "order": display_name es un campo calculado y no almacenado, y
+        # pedirle a Odoo que ordene por él termina en un error del servidor.
+        # Ordenar acá cuesta nada y no depende de qué campos tenga el modelo.
+        #
+        # Y si una lista falla -un modelo sin permisos, un campo que no existe
+        # en esta instancia- se devuelve vacía con un aviso, en vez de tirar
+        # abajo la pantalla entera por un solo desplegable.
+        try:
+            filas = o.call(modelo, "search_read", [dominio or []],
+                           {"fields": ["display_name"], "limit": limite})
+        except HTTPException as e:
+            avisos.append(f"{modelo}: {e.detail}")
+            return []
+        return sorted(({"id": f["id"], "name": f.get("display_name") or str(f["id"])}
+                       for f in filas), key=lambda x: x["name"].lower())
+
     return {
         "categorias":       leer("product.category"),
         "unidades":         leer("uom.uom"),
@@ -137,6 +174,7 @@ def _catalogo(o):
         # con las operaciones que su tipo admite.
         "columnas": [{"col": c["col"], "tipo": c["tipo"]}
                      for c in COLUMNAS_PRODUCTOS if not c.get("clave")],
+        "avisos": avisos,
     }
 
 
