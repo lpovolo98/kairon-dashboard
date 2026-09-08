@@ -47,7 +47,13 @@ REPORTE_CRON_SECRET  = os.getenv("REPORTE_CRON_SECRET", "")    # token simple pa
 # variable de entorno. El AUD sigue vacio, y sin el no se bloquea nada.
 CF_ACCESS_TEAM_DOMAIN = os.getenv(
     "CF_ACCESS_TEAM_DOMAIN", "fancy-smoke-993b.cloudflareaccess.com").strip()
-CF_ACCESS_AUD         = os.getenv("CF_ACCESS_AUD", "").strip()
+# Audiencia de la aplicacion de Access. Tampoco es un secreto: viaja en el
+# campo "aud" de cada token que Cloudflare firma. Con esta y el team domain
+# puestos, el middleware empieza a exigir.
+# Para desactivarlo sin tocar codigo: poner CF_ACCESS_AUD vacia en Railway.
+CF_ACCESS_AUD         = os.getenv(
+    "CF_ACCESS_AUD",
+    "cb9a82abc8573496c3c12b51aa83f0db89ff92309955213d510be20ba12b096b").strip()
 
 if CF_ACCESS_TEAM_DOMAIN:
     CF_ACCESS_TEAM_DOMAIN = (CF_ACCESS_TEAM_DOMAIN
