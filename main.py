@@ -42,7 +42,11 @@ REPORTE_CRON_SECRET  = os.getenv("REPORTE_CRON_SECRET", "")    # token simple pa
 # La URL de Railway no pasa por Cloudflare, asi que no lo trae: verificar la
 # firma es lo que cierra esa puerta. Chequear solo que el header exista no
 # alcanza — cualquiera puede mandarlo a mano contra la URL de Railway.
-CF_ACCESS_TEAM_DOMAIN = os.getenv("CF_ACCESS_TEAM_DOMAIN", "").strip()
+# El team domain no es un secreto: aparece en la URL de la pantalla de login
+# de Cloudflare, que ve cualquiera. Va como default para no depender de una
+# variable de entorno. El AUD sigue vacio, y sin el no se bloquea nada.
+CF_ACCESS_TEAM_DOMAIN = os.getenv(
+    "CF_ACCESS_TEAM_DOMAIN", "fancy-smoke-993b.cloudflareaccess.com").strip()
 CF_ACCESS_AUD         = os.getenv("CF_ACCESS_AUD", "").strip()
 
 if CF_ACCESS_TEAM_DOMAIN:
