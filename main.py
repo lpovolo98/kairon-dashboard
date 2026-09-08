@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
 from twilio.rest import Client as TwilioClient
 import threading
+import unicodedata
 
 load_dotenv()
 
@@ -1268,6 +1269,295 @@ def refresh_all():
     ok_general = all(v == "ok" for v in resultados.values())
     return {"ok": ok_general, "refreshed_at": datetime.now().isoformat(), "detalle": resultados}
 
+# ─── Mapa de clientes ───────────────────────────────────────
+# Códigos de producto que representan un exhibidor. Si el cliente compró
+# alguno alguna vez, damos por hecho que lo tiene colocado.
+EXHIBIDOR_CODES = {"111", "112"}
+
+# Campo de Studio donde vive el dia de visita del cliente. Es un
+# many2many, asi que trae ids y hay que resolverlos contra su modelo.
+# Tener dia de visita cargado es lo que define que el cliente sea parte
+# de la cartera: es, literalmente, "lo visito".
+CAMPO_DIA_VISITA = "x_studio_many2many_field_4bq_1j6ma1s65"
+
+# Geo de los clientes (código, lat/lon, canal, zonas). Viene del maestro de
+# QuadMinds: es la fuente con coordenadas completas para los 806 puntos.
+# Odoo aporta la parte comercial y, si tiene coordenadas propias cargadas,
+# se prefieren esas.
+_DATA_STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "data")
+_GEO_PATH    = os.path.join(_DATA_STATIC, "clientes_geo.json")
+_ZONAS_PATH  = os.path.join(_DATA_STATIC, "zonas.geojson")
+_geo_cache = None
+_zonas_cache = None
+
+
+def cargar_zonas():
+    """Anillos de las 5 zonas de venta, para ubicar un punto."""
+    global _zonas_cache
+    if _zonas_cache is None:
+        with open(_ZONAS_PATH, "r", encoding="utf-8") as f:
+            gj = json.load(f)
+        _zonas_cache = [(f["properties"]["nombre"], f["geometry"]["coordinates"][0])
+                        for f in gj["features"]]
+    return _zonas_cache
+
+
+def zona_de(lon, lat):
+    """Zona que contiene al punto (ray casting). La zona se calcula acá y no
+    en el maestro porque las coordenadas pueden venir de Odoo: si se usara la
+    precalculada, un cliente podría quedar dibujado dentro de un polígono y
+    etiquetado con otro."""
+    for nombre, anillo in cargar_zonas():
+        dentro = False
+        for i in range(len(anillo) - 1):
+            x1, y1 = anillo[i]
+            x2, y2 = anillo[i + 1]
+            if (y1 > lat) != (y2 > lat) and lon < x1 + (lat - y1) / (y2 - y1) * (x2 - x1):
+                dentro = not dentro
+        if dentro:
+            return nombre
+    return "Fuera de zona"
+
+
+def _sin_acentos(s):
+    return unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode().lower()
+
+def cargar_geo_clientes():
+    global _geo_cache
+    if _geo_cache is None:
+        with open(_GEO_PATH, "r", encoding="utf-8") as f:
+            _geo_cache = json.load(f)
+    return _geo_cache
+
+
+def _norm_cod(v):
+    """Normaliza un código de cliente para comparar entre Odoo y el maestro.
+    En Odoo es texto y puede venir con espacios o con .0 si alguna vez pasó
+    por una planilla; en el maestro es entero."""
+    if v is None or v is False:
+        return ""
+    s = str(v).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s.lstrip("0") or "0"
+
+
+def build_mapa_data(uid, models, meses_n=12):
+    """Cruza el maestro geo con la actividad comercial de Odoo.
+
+    El vínculo entre ambos lados es el código de cliente. En Odoo vive en
+    'ref' salvo que la instancia use un campo de Studio, así que se detecta
+    cuál de los candidatos existe realmente antes de pedirlo — pedir un
+    campo inexistente hace fallar todo el search_read."""
+    geo = cargar_geo_clientes()
+
+    # Qué campos de res.partner existen de verdad en esta instancia.
+    meta = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "res.partner", "fields_get", [], {"attributes": ["type", "relation"]})
+    disponibles = set(meta.keys())
+
+    CAND_COD = ["ref", "x_studio_codigo", "x_studio_codigo_cliente", "x_studio_cod_cliente"]
+    campos_cod = [c for c in CAND_COD if c in disponibles]
+    campos_geo = [c for c in ("partner_latitude", "partner_longitude") if c in disponibles]
+
+    fields = ["id", "name", "user_id"] + campos_cod + campos_geo
+    for c in ("x_studio_canal", "x_studio_tipo_de_comercio", CAMPO_DIA_VISITA):
+        if c in disponibles:
+            fields.append(c)
+
+    partners = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "res.partner", "search_read",
+        [[["customer_rank", ">", 0], ["active", "=", True]]],
+        {"fields": fields, "limit": 20000}
+    )
+
+    # Cartera = tiene día de visita cargado. Si el campo no existe en la
+    # instancia se cae al criterio que ya usa el resto del dashboard
+    # (tener alguna venta), y el diagnóstico dice cuál se aplicó.
+    hay_dia = CAMPO_DIA_VISITA in disponibles
+    dias_nombre = {}
+    if hay_dia:
+        rel = (meta[CAMPO_DIA_VISITA] or {}).get("relation")
+        ids = {i for p in partners for i in (p.get(CAMPO_DIA_VISITA) or [])}
+        if rel and ids:
+            for d in models.execute_kw(ODOO_DB, uid, ODOO_PASS, rel, "read",
+                                       [sorted(ids)], {"fields": ["display_name"]}):
+                dias_nombre[d["id"]] = d.get("display_name") or str(d["id"])
+        cartera_ids = {p["id"] for p in partners if p.get(CAMPO_DIA_VISITA)}
+        criterio = "dia_de_visita"
+    else:
+        cartera_ids = set(models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+            "res.partner", "search",
+            [[["sale_order_ids", "!=", False]]], {"limit": 50000}))
+        criterio = "tiene_ventas"
+
+    # Índices para el cruce: por código y, como red, por nombre normalizado.
+    por_cod, por_nom = {}, {}
+    for p in partners:
+        for c in campos_cod:
+            k = _norm_cod(p.get(c))
+            if k and k not in por_cod:
+                por_cod[k] = p
+        n = (p.get("name") or "").strip().upper()
+        if n and n not in por_nom:
+            por_nom[n] = p
+
+    # Ventana de meses a analizar.
+    hoy = date.today()
+    primer_mes = (hoy.replace(day=1) - timedelta(days=31 * (meses_n - 1))).replace(day=1)
+    desde = primer_mes.strftime("%Y-%m-%d")
+
+    ordenes = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "sale.order", "search_read",
+        [[["state", "in", ["sale", "done"]], ["date_order", ">=", desde]]],
+        {"fields": ["id", "partner_id", "date_order"], "limit": 100000}
+    )
+    orden_info = {o["id"]: o for o in ordenes}
+
+    lineas = []
+    if ordenes:
+        lineas = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+            "sale.order.line", "search_read",
+            [[["order_id", "in", list(orden_info.keys())]]],
+            {"fields": ["order_id", "product_id", "price_subtotal", "product_uom_qty"],
+             "limit": 400000}
+        )
+
+    # Producto -> template (para el proveedor) y default_code (para exhibidor).
+    prod_ids = list({l["product_id"][0] for l in lineas if l.get("product_id")})
+    prod_info = {}
+    if prod_ids:
+        for p in models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+                "product.product", "search_read",
+                [[["id", "in", prod_ids]]],
+                {"fields": ["id", "default_code", "product_tmpl_id"], "limit": 50000}):
+            prod_info[p["id"]] = {
+                "code": (p.get("default_code") or "").strip(),
+                "tmpl": p["product_tmpl_id"][0] if p.get("product_tmpl_id") else None,
+            }
+    proveedores_map = get_proveedores_por_producto(models, uid)
+
+    # Agregación por partner y por mes.
+    acum = defaultdict(lambda: {"meses": defaultdict(lambda: {"fact": 0.0, "ops": set(), "provs": defaultdict(float)}),
+                                "exhibidor": False})
+    for l in lineas:
+        o = orden_info.get(l["order_id"][0] if l.get("order_id") else None)
+        if not o or not o.get("partner_id"):
+            continue
+        pid = o["partner_id"][0]
+        mes = o["date_order"][:7]
+        pi = prod_info.get(l["product_id"][0]) if l.get("product_id") else None
+        reg = acum[pid]
+        m = reg["meses"][mes]
+        m["fact"] += l.get("price_subtotal") or 0.0
+        m["ops"].add(o["id"])
+        if pi:
+            if pi["code"] in EXHIBIDOR_CODES:
+                reg["exhibidor"] = True
+            prov = proveedores_map.get(pi["tmpl"], "Sin proveedor")
+            m["provs"][prov] += l.get("price_subtotal") or 0.0
+
+    meses = sorted({o["date_order"][:7] for o in ordenes})
+    proveedores = sorted({p for r in acum.values() for m in r["meses"].values() for p in m["provs"]})
+
+    # El cruce tiene que ser 1 a 1. Sin esto, dos fichas del maestro que
+    # comparten nombre (una sucursal cargada dos veces, por ejemplo) matchean
+    # contra el mismo partner y sus ventas se cuentan dos veces en los KPIs.
+    asignado, usados = {}, set()
+    for g in geo:                                   # 1ª pasada: por código
+        p = por_cod.get(_norm_cod(g["cod"]))
+        if p and p["id"] not in usados:
+            asignado[g["cod"]] = p
+            usados.add(p["id"])
+    for g in geo:                                   # 2ª pasada: por nombre
+        if g["cod"] in asignado:
+            continue
+        p = por_nom.get((g["nom"] or "").strip().upper())
+        if p and p["id"] not in usados:
+            asignado[g["cod"]] = p
+            usados.add(p["id"])
+
+    salida, matcheados = [], 0
+    for g in geo:
+        p = asignado.get(g["cod"])
+        item = {
+            "cod": g["cod"], "nom": g["nom"], "dir": g["dir"],
+            "canal": g["canal"], "lat": g["lat"], "lon": g["lon"],
+            "zona": g["zona"], "odoo_id": None, "vendedor": None,
+            "cartera": False, "dias_visita": [], "exhibidor": False, "meses": {},
+        }
+        if p:
+            matcheados += 1
+            item["odoo_id"] = p["id"]
+            item["cartera"] = p["id"] in cartera_ids
+            item["dias_visita"] = [dias_nombre.get(i, str(i))
+                                   for i in (p.get(CAMPO_DIA_VISITA) or [])]
+            item["vendedor"] = p["user_id"][1] if p.get("user_id") else None
+            # Si Odoo tiene coordenadas propias cargadas, mandan esas.
+            la, lo = p.get("partner_latitude"), p.get("partner_longitude")
+            if la and lo:
+                item["lat"], item["lon"] = round(la, 6), round(lo, 6)
+                item["zona"] = zona_de(item["lon"], item["lat"])
+            if p.get("x_studio_canal"):
+                item["canal_odoo"] = p["x_studio_canal"]
+            reg = acum.get(p["id"])
+            if reg:
+                item["exhibidor"] = reg["exhibidor"]
+                item["meses"] = {
+                    mes: {"fact": round(v["fact"], 2), "ops": len(v["ops"]),
+                          "provs": {k: round(x, 2) for k, x in v["provs"].items()}}
+                    for mes, v in reg["meses"].items()
+                }
+        salida.append(item)
+
+    return {
+        "clientes": salida,
+        "meses": meses,
+        "proveedores": proveedores,
+        "diagnostico": {
+            "geo_total": len(geo),
+            "odoo_partners": len(partners),
+            "matcheados": matcheados,
+            "sin_match": len(geo) - matcheados,
+            "en_cartera": sum(1 for c in salida if c["cartera"]),
+            "criterio_cartera": criterio,
+            "campo_dia_visita": CAMPO_DIA_VISITA if hay_dia else None,
+            "con_dia_visita": sum(1 for c in salida if c["dias_visita"]),
+            # Cuántos tienen el día de Odoo de acuerdo con la zona en la que
+            # caen geométricamente. Se comparan sin acentos porque Odoo los
+            # escribe sin ellos ("Miercoles") y el KML con ("Miércoles").
+            "dia_coincide_con_zona": sum(
+                1 for c in salida if c["dias_visita"] and
+                any(_sin_acentos(c["zona"]) == _sin_acentos(d) for d in c["dias_visita"])),
+            "dia_difiere_de_zona": sum(
+                1 for c in salida if c["dias_visita"] and
+                not any(_sin_acentos(c["zona"]) == _sin_acentos(d) for d in c["dias_visita"])),
+            # Clientes de Odoo que no están en el maestro: no tienen
+            # coordenadas, así que hoy no se ven en el mapa.
+            "odoo_sin_geo": len(partners) - matcheados,
+            # Compran pero no tienen día de visita cargado.
+            "compran_sin_dia_visita": sum(
+                1 for c in salida if c["meses"] and not c["cartera"]),
+            "campos_codigo_detectados": campos_cod,
+            "coords_odoo_disponibles": bool(campos_geo),
+            "exhibidor_codes": sorted(EXHIBIDOR_CODES),
+        },
+    }
+
+
+@app.get("/api/mapa/clientes")
+def api_mapa_clientes(force: bool = False):
+    key = "mapa_clientes"
+    if not force:
+        cached = cache_get(key)
+        if cached:
+            return {"data": cached, "cached": True}
+    uid, models = odoo_connect()
+    data = build_mapa_data(uid, models)
+    cache_set(key, data)
+    return {"data": data, "cached": False}
+
+
 # ─── Agente de ventas · WhatsApp ─────────────────────────────
 # Módulo para armar la cartera de clientes a contactar por WhatsApp:
 # trae los clientes de Odoo, los agrupa por día de visita, los ubica en
@@ -1286,8 +1576,8 @@ MENSAJE_DEFAULT = (
 # Campo de res.partner que guarda el día de visita. En Kairon es un many2many
 # creado con Studio (un cliente puede tener más de un día: "Lunes y Jueves").
 # Se puede pisar por variable de entorno o cambiar desde la UI (paso 1).
-CAMPO_DIA_VISITA_DEFAULT = os.getenv(
-    "CAMPO_DIA_VISITA", "x_studio_many2many_field_4bq_1j6ma1s65")
+# CAMPO_DIA_VISITA lo define el módulo Mapas, que usa el mismo campo.
+CAMPO_DIA_VISITA_DEFAULT = os.getenv("CAMPO_DIA_VISITA", CAMPO_DIA_VISITA)
 
 # Campo de res.partner con el nombre de la persona con la que se habla (el
 # dueño del comercio o el encargado), que no es la razón social del cliente.
