@@ -128,6 +128,37 @@ async def middleware_access(request: Request, call_next):
     return await call_next(request)
 
 
+@app.get("/api/access/aud")
+def api_access_aud(request: Request):
+    """Ayuda de configuracion: dice que audiencia esta poniendo Cloudflare en
+    los tokens, para poder fijar CF_ACCESS_AUD sin buscarla a mano en el
+    panel de Zero Trust.
+
+    Lee el token sin verificar la firma, porque justamente todavia no se sabe
+    contra que audiencia verificar. Es seguro: solo devuelve 'aud' e 'iss',
+    que son identificadores publicos que viajan en cada token, nunca el token
+    en si ni datos del usuario. Y se apaga sola en cuanto Access queda
+    configurado.
+    """
+    if access_configurado():
+        return {"ya_configurado": True, "aud": CF_ACCESS_AUD}
+    token = (request.headers.get("cf-access-jwt-assertion")
+             or request.cookies.get("CF_Authorization"))
+    if not token:
+        return {"error": "No llegó ningún token de Cloudflare. "
+                         "Abrí esta misma dirección en app.kaironsrl.com.ar, "
+                         "no en la URL de Railway."}
+    try:
+        import jwt as _jwt
+        claims = _jwt.decode(token, options={
+            "verify_signature": False, "verify_aud": False, "verify_exp": False})
+        aud = claims.get("aud")
+        return {"aud": aud[0] if isinstance(aud, list) else aud,
+                "iss": claims.get("iss")}
+    except Exception as e:
+        return {"error": f"No se pudo leer el token: {e}"}
+
+
 @app.get("/api/me")
 def api_me(request: Request):
     """Identidad verificada del lado del servidor. A diferencia de
