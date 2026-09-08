@@ -3416,7 +3416,8 @@ async function verCliente(cod) {
     <div class="dt-dir">${c.dir || 'Sin dirección'}</div>
     <div class="dt-row"><span>Código</span><b>${c.cod}</b></div>
     <div class="dt-row"><span>Canal</span><b>${c.canal}</b></div>
-    <div class="dt-row"><span>Zona</span><b>${c.zona}</b></div>
+    <div class="dt-row"><span>Zona (por ubicación)</span><b>${c.zona}</b></div>
+    <div class="dt-row"><span>Día de visita</span><b>${(c.dias_visita || []).join(', ') || '—'}</b></div>
     <div class="dt-row"><span>Situación</span><b style="color:${c.cartera ? 'var(--brand)' : 'var(--muted)'}">${c.cartera ? 'En cartera' : 'Fuera de cartera'}</b></div>
     <div class="dt-row"><span>Vendedor</span><b>${c.vendedor || '—'}</b></div>
     <div class="dt-row"><span>Exhibidor</span><b style="color:${c.exhibidor ? 'var(--accent)' : 'var(--muted)'}">${c.exhibidor ? 'Sí' : 'No'}</b></div>

@@ -1267,6 +1267,12 @@ def refresh_all():
 # alguno alguna vez, damos por hecho que lo tiene colocado.
 EXHIBIDOR_CODES = {"111", "112"}
 
+# Campo de Studio donde vive el dia de visita del cliente. Es un
+# many2many, asi que trae ids y hay que resolverlos contra su modelo.
+# Tener dia de visita cargado es lo que define que el cliente sea parte
+# de la cartera: es, literalmente, "lo visito".
+CAMPO_DIA_VISITA = "x_studio_many2many_field_4bq_1j6ma1s65"
+
 # Geo de los clientes (código, lat/lon, canal, zonas). Viene del maestro de
 # QuadMinds: es la fuente con coordenadas completas para los 806 puntos.
 # Odoo aporta la parte comercial y, si tiene coordenadas propias cargadas,
@@ -1305,15 +1311,16 @@ def build_mapa_data(uid, models, meses_n=12):
     geo = cargar_geo_clientes()
 
     # Qué campos de res.partner existen de verdad en esta instancia.
-    disponibles = set(models.execute_kw(ODOO_DB, uid, ODOO_PASS,
-        "res.partner", "fields_get", [], {"attributes": ["type"]}).keys())
+    meta = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+        "res.partner", "fields_get", [], {"attributes": ["type", "relation"]})
+    disponibles = set(meta.keys())
 
     CAND_COD = ["ref", "x_studio_codigo", "x_studio_codigo_cliente", "x_studio_cod_cliente"]
     campos_cod = [c for c in CAND_COD if c in disponibles]
     campos_geo = [c for c in ("partner_latitude", "partner_longitude") if c in disponibles]
 
     fields = ["id", "name", "user_id"] + campos_cod + campos_geo
-    for c in ("x_studio_canal", "x_studio_tipo_de_comercio"):
+    for c in ("x_studio_canal", "x_studio_tipo_de_comercio", CAMPO_DIA_VISITA):
         if c in disponibles:
             fields.append(c)
 
@@ -1323,13 +1330,25 @@ def build_mapa_data(uid, models, meses_n=12):
         {"fields": fields, "limit": 20000}
     )
 
-    # Cartera = los que tienen relación comercial en Odoo (alguna venta
-    # alguna vez), que es el mismo criterio que ya usa el resto del
-    # dashboard. El maestro de QuadMinds no sirve para esto: sus columnas
-    # de visita (dispositivo, día, última visita) vienen vacías.
-    cartera_ids = set(models.execute_kw(ODOO_DB, uid, ODOO_PASS,
-        "res.partner", "search",
-        [[["sale_order_ids", "!=", False]]], {"limit": 50000}))
+    # Cartera = tiene día de visita cargado. Si el campo no existe en la
+    # instancia se cae al criterio que ya usa el resto del dashboard
+    # (tener alguna venta), y el diagnóstico dice cuál se aplicó.
+    hay_dia = CAMPO_DIA_VISITA in disponibles
+    dias_nombre = {}
+    if hay_dia:
+        rel = (meta[CAMPO_DIA_VISITA] or {}).get("relation")
+        ids = {i for p in partners for i in (p.get(CAMPO_DIA_VISITA) or [])}
+        if rel and ids:
+            for d in models.execute_kw(ODOO_DB, uid, ODOO_PASS, rel, "read",
+                                       [sorted(ids)], {"fields": ["display_name"]}):
+                dias_nombre[d["id"]] = d.get("display_name") or str(d["id"])
+        cartera_ids = {p["id"] for p in partners if p.get(CAMPO_DIA_VISITA)}
+        criterio = "dia_de_visita"
+    else:
+        cartera_ids = set(models.execute_kw(ODOO_DB, uid, ODOO_PASS,
+            "res.partner", "search",
+            [[["sale_order_ids", "!=", False]]], {"limit": 50000}))
+        criterio = "tiene_ventas"
 
     # Índices para el cruce: por código y, como red, por nombre normalizado.
     por_cod, por_nom = {}, {}
@@ -1407,12 +1426,14 @@ def build_mapa_data(uid, models, meses_n=12):
             "cod": g["cod"], "nom": g["nom"], "dir": g["dir"],
             "canal": g["canal"], "lat": g["lat"], "lon": g["lon"],
             "zona": g["zona"], "odoo_id": None, "vendedor": None,
-            "cartera": False, "exhibidor": False, "meses": {},
+            "cartera": False, "dias_visita": [], "exhibidor": False, "meses": {},
         }
         if p:
             matcheados += 1
             item["odoo_id"] = p["id"]
             item["cartera"] = p["id"] in cartera_ids
+            item["dias_visita"] = [dias_nombre.get(i, str(i))
+                                   for i in (p.get(CAMPO_DIA_VISITA) or [])]
             item["vendedor"] = p["user_id"][1] if p.get("user_id") else None
             # Si Odoo tiene coordenadas propias cargadas, mandan esas.
             la, lo = p.get("partner_latitude"), p.get("partner_longitude")
@@ -1440,6 +1461,16 @@ def build_mapa_data(uid, models, meses_n=12):
             "matcheados": matcheados,
             "sin_match": len(geo) - matcheados,
             "en_cartera": sum(1 for c in salida if c["cartera"]),
+            "criterio_cartera": criterio,
+            "campo_dia_visita": CAMPO_DIA_VISITA if hay_dia else None,
+            "con_dia_visita": sum(1 for c in salida if c["dias_visita"]),
+            # Cuántos tienen el día de Odoo de acuerdo con la zona en la que
+            # caen geométricamente. Una brecha grande significa que el ruteo
+            # y los polígonos no están diciendo lo mismo.
+            "dia_coincide_con_zona": sum(
+                1 for c in salida if c["dias_visita"] and
+                any(c["zona"].lower() in d.lower() or d.lower() in c["zona"].lower()
+                    for d in c["dias_visita"])),
             "campos_codigo_detectados": campos_cod,
             "coords_odoo_disponibles": bool(campos_geo),
             "exhibidor_codes": sorted(EXHIBIDOR_CODES),
