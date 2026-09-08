@@ -375,8 +375,28 @@ def build_stock_data(uid, models):
             pid = l["product_id"][0]
             venta_map[pid] += normalizar_qty(l["qty_invoiced"], l["product_uom_id"], uom_factors)
 
+    # Venta del último mes cerrado. Va en una consulta aparte y no se deduce
+    # de los 60 días de arriba porque ese rango no siempre cubre el mes
+    # anterior completo: un 31 de octubre, 60 días atrás cae el 1 de
+    # septiembre y se perdería el primer día del mes.
+    fin_mes_ant = date.today().replace(day=1) - timedelta(days=1)
+    ini_mes_ant = fin_mes_ant.replace(day=1)
+    lineas_mes_ant = odoo_call(models, uid, "sale.order.line", "search_read",
+        [["order_id.state", "in", ["sale", "done"]],
+         ["order_id.date_order", ">=", ini_mes_ant.strftime("%Y-%m-%d 00:00:00")],
+         ["order_id.date_order", "<=", fin_mes_ant.strftime("%Y-%m-%d 23:59:59")]],
+        ["product_id", "qty_invoiced", "product_uom_id"]
+    )
+    venta_mes_ant_map = defaultdict(float)
+    for l in lineas_mes_ant:
+        if l["product_id"]:
+            venta_mes_ant_map[l["product_id"][0]] += normalizar_qty(
+                l["qty_invoiced"], l["product_uom_id"], uom_factors)
+    MES_ANT = ini_mes_ant.strftime("%Y-%m")
+
     # Info productos
-    pids = list(set(list(stock_map.keys()) + list(venta_map.keys())))
+    pids = list(set(list(stock_map.keys()) + list(venta_map.keys())
+                    + list(venta_mes_ant_map.keys())))
     if not pids:
         return []
     productos = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
@@ -398,6 +418,8 @@ def build_stock_data(uid, models):
         stock_unidades = stock_map.get(pid, 0)
         venta_unidades = venta_map.get(pid, 0)
         stock_cajas = round(stock_unidades / unid_caja, 2) if unid_caja > 0 else stock_unidades
+        venta_ma_unid = venta_mes_ant_map.get(pid, 0)
+        venta_mes_ant = round(venta_ma_unid / unid_caja, 1) if unid_caja > 0 else round(venta_ma_unid, 1)
         avg_diario_cajas = round((venta_unidades / unid_caja) / dias, 3) if unid_caja > 0 else round(venta_unidades / dias, 3)
 
         dias_inv = round(stock_cajas / avg_diario_cajas, 1) if avg_diario_cajas > 0 else 9999
@@ -421,6 +443,8 @@ def build_stock_data(uid, models):
             "uom": "Cajas",
             "unid_caja": unid_caja,
             "stock_actual": stock_cajas,
+            "venta_mes_ant": venta_mes_ant,
+            "mes_ant": MES_ANT,
             "avg_diario": avg_diario_cajas,
             "avg_mensual": round(avg_diario_cajas * 30, 1),
             "dias_inventario": dias_inv,
