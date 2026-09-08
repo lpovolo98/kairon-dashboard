@@ -9,3 +9,6 @@ objetivos.json
 agente_config.json
 administracion-data/
 .test-deps/
+
+# Historial local de corridas del agente de productos
+productos-data/
