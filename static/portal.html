@@ -224,12 +224,23 @@ document.getElementById('filtro').addEventListener('input', e => {
 document.getElementById('fecha').textContent =
   new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
-fetch('/cdn-cgi/access/get-identity')
+// /api/me devuelve la identidad que el backend ya verifico contra la firma
+// de Cloudflare. Se prefiere a /cdn-cgi/access/get-identity, que lo resuelve
+// Cloudflare y no existe fuera del dominio; ese queda de respaldo.
+function saludar(email) {
+  if (!email) return false;
+  const u = email.split('@')[0].split('.')[0];
+  document.getElementById('saludo').textContent =
+    'Bienvenido, ' + u.charAt(0).toUpperCase() + u.slice(1);
+  return true;
+}
+fetch('/api/me')
   .then(r => r.ok ? r.json() : null)
   .then(d => {
-    if (!d || !d.email) return;
-    const u = d.email.split('@')[0];
-    document.getElementById('saludo').textContent = 'Bienvenido, ' + u.charAt(0).toUpperCase() + u.slice(1);
+    if (saludar(d && d.email)) return;
+    return fetch('/cdn-cgi/access/get-identity')
+      .then(r => r.ok ? r.json() : null)
+      .then(d2 => saludar(d2 && d2.email));
   })
   .catch(() => {});
 </script>

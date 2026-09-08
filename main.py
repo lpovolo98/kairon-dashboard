@@ -7,9 +7,9 @@ import re
 import json
 from datetime import datetime, date, timedelta
 from collections import defaultdict
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -36,6 +36,102 @@ TWILIO_AUTH_TOKEN    = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "")   # ej: "whatsapp:+14155238886"
 REPORTE_WHATSAPP_TO  = os.getenv("REPORTE_WHATSAPP_TO", "")    # ej: "whatsapp:+5491132308807"
 REPORTE_CRON_SECRET  = os.getenv("REPORTE_CRON_SECRET", "")    # token simple para proteger el endpoint del cron
+
+# ─── Cloudflare Access ──────────────────────────────────────
+# Cloudflare pone un JWT firmado en cada request que pasa por el dominio.
+# La URL de Railway no pasa por Cloudflare, asi que no lo trae: verificar la
+# firma es lo que cierra esa puerta. Chequear solo que el header exista no
+# alcanza — cualquiera puede mandarlo a mano contra la URL de Railway.
+CF_ACCESS_TEAM_DOMAIN = os.getenv("CF_ACCESS_TEAM_DOMAIN", "").strip()
+CF_ACCESS_AUD         = os.getenv("CF_ACCESS_AUD", "").strip()
+
+if CF_ACCESS_TEAM_DOMAIN:
+    CF_ACCESS_TEAM_DOMAIN = (CF_ACCESS_TEAM_DOMAIN
+                             .replace("https://", "").replace("http://", "").rstrip("/"))
+
+# Rutas que tienen que seguir siendo publicas:
+#  - /reporte/{vendedor}: el link que se manda por WhatsApp. Los vendedores
+#    lo abren sin cuenta de Access. Es de solo lectura y de un vendedor.
+#  - /api/reporte-diario: lo dispara un cron externo, que se autentica con
+#    su propio secret (REPORTE_CRON_SECRET).
+#  - /api/status: healthcheck.
+ACCESS_RUTAS_PUBLICAS   = {"/api/status", "/api/reporte-diario"}
+ACCESS_PREFIJOS_PUBLICOS = ("/reporte/",)
+
+_jwks_client = None
+_jwks_lock = threading.Lock()
+
+
+def access_configurado():
+    return bool(CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD)
+
+
+def _get_jwks_client():
+    """Cliente de claves publicas de Cloudflare. PyJWKClient cachea las
+    claves, asi que no sale a la red en cada request."""
+    global _jwks_client
+    with _jwks_lock:
+        if _jwks_client is None:
+            import jwt as _jwt
+            _jwks_client = _jwt.PyJWKClient(
+                f"https://{CF_ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs",
+                cache_keys=True,
+            )
+        return _jwks_client
+
+
+def verificar_token_access(token):
+    """Devuelve la identidad si el JWT es valido, o None. Nunca levanta:
+    cualquier problema de firma, audiencia, vencimiento o red se traduce en
+    'no autenticado'."""
+    if not token:
+        return None
+    try:
+        import jwt as _jwt
+        clave = _get_jwks_client().get_signing_key_from_jwt(token)
+        datos = _jwt.decode(
+            token, clave.key, algorithms=["RS256"],
+            audience=CF_ACCESS_AUD,
+            issuer=f"https://{CF_ACCESS_TEAM_DOMAIN}",
+        )
+        return {"email": datos.get("email", ""), "sub": datos.get("sub", "")}
+    except Exception:
+        return None
+
+
+def _es_publica(path):
+    return path in ACCESS_RUTAS_PUBLICAS or path.startswith(ACCESS_PREFIJOS_PUBLICOS)
+
+
+@app.middleware("http")
+async def middleware_access(request: Request, call_next):
+    request.state.usuario = None
+    # Si no esta configurado no se bloquea nada. Es a proposito: si el deploy
+    # empezara a rechazar todo antes de que existan las variables de entorno,
+    # el dashboard quedaria inaccesible incluso por el dominio.
+    if not access_configurado() or _es_publica(request.url.path):
+        return await call_next(request)
+
+    token = (request.headers.get("cf-access-jwt-assertion")
+             or request.cookies.get("CF_Authorization"))
+    identidad = verificar_token_access(token)
+    if not identidad:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Acceso no autorizado. Entrá por app.kaironsrl.com.ar."},
+        )
+    request.state.usuario = identidad
+    return await call_next(request)
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    """Identidad verificada del lado del servidor. A diferencia de
+    /cdn-cgi/access/get-identity, que lo resuelve Cloudflare y no existe en
+    local, esto responde siempre y dice si Access esta activo."""
+    u = getattr(request.state, "usuario", None)
+    return {"email": (u or {}).get("email", ""), "access_activo": access_configurado()}
+
 
 # ─── Cache store ────────────────────────────────────────────
 _cache = {}
