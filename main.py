@@ -2,12 +2,14 @@ import xmlrpc.client
 import os
 import time
 import urllib.request
+import urllib.parse
+import re
 import json
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -48,6 +50,10 @@ def cache_get(key):
 def cache_set(key, data):
     with _cache_lock:
         _cache[key] = {"data": data, "ts": time.time()}
+
+def cache_del(key):
+    with _cache_lock:
+        _cache.pop(key, None)
 
 # ─── Odoo connection ────────────────────────────────────────
 def odoo_connect():
@@ -1262,6 +1268,570 @@ def refresh_all():
     ok_general = all(v == "ok" for v in resultados.values())
     return {"ok": ok_general, "refreshed_at": datetime.now().isoformat(), "detalle": resultados}
 
+# ─── Agente de ventas · WhatsApp ─────────────────────────────
+# Módulo para armar la cartera de clientes a contactar por WhatsApp:
+# trae los clientes de Odoo, los agrupa por día de visita, los ubica en
+# un mapa y deja marcar manualmente a quién se contacta. El resultado se
+# exporta como planilla con hipervínculos wa.me.
+
+AGENTE_PATH = os.path.join(_DATA_DIR, "agente_config.json")
+_agente_lock = threading.Lock()
+
+MENSAJE_DEFAULT = (
+    "Hola {nombre}! Te escribo de Kairon. "
+    "Te paso el catálogo actualizado por si querés armar el pedido de esta semana. "
+    "¿Te tomo algo?"
+)
+
+AGENTE_CONFIG_DEFAULT = {
+    # Nombre técnico del campo de res.partner que guarda el día de visita.
+    # Se define desde la UI con /api/agente/campos (paso "identificar campo").
+    "campo_dia_visita": "",
+    "mensaje": MENSAJE_DEFAULT,
+    "seleccionados": [],   # ids de res.partner marcados para contactar
+    "geo": {},             # {"<partner_id>": [lat, lon]} geocodificados acá
+}
+
+
+def cargar_agente_config():
+    with _agente_lock:
+        cfg = dict(AGENTE_CONFIG_DEFAULT)
+        if os.path.exists(AGENTE_PATH):
+            try:
+                with open(AGENTE_PATH, "r", encoding="utf-8") as f:
+                    cfg.update(json.load(f) or {})
+            except Exception:
+                pass
+        cfg["seleccionados"] = [int(x) for x in cfg.get("seleccionados", [])]
+        cfg["geo"] = {str(k): v for k, v in (cfg.get("geo") or {}).items()}
+        return cfg
+
+
+def guardar_agente_config(cfg):
+    with _agente_lock:
+        with open(AGENTE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+# ─── Teléfonos ───────────────────────────────────────────────
+def _limpiar_nacional_ar(n):
+    """Saca el 0 de larga distancia y el 15 de celular: 011 15 3230-8807 → 1132308807"""
+    if n.startswith("0"):
+        n = n[1:]
+    for corte in (2, 3, 4):
+        if len(n) > corte + 2 and n[corte:corte + 2] == "15":
+            cand = n[:corte] + n[corte + 2:]
+            if len(cand) == 10:
+                return cand
+    return n
+
+
+def normalizar_tel_ar(raw):
+    """Devuelve (numero_e164_sin_mas, ok). ok=False cuando quedó un número
+    con largo raro: se muestra igual en la UI pero marcado para revisar."""
+    if not raw:
+        return "", False
+    digits = re.sub(r"\D", "", str(raw))
+    if not digits:
+        return "", False
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if digits.startswith("54"):
+        resto = digits[2:]
+        if resto.startswith("9"):
+            resto = resto[1:]
+        resto = _limpiar_nacional_ar(resto)
+    else:
+        resto = _limpiar_nacional_ar(digits)
+    if not resto:
+        return "", False
+    return "549" + resto, len(resto) == 10
+
+
+def _primer_telefono(p):
+    for campo in ("mobile", "phone"):
+        crudo = p.get(campo)
+        if crudo:
+            num, ok = normalizar_tel_ar(crudo)
+            if num:
+                return {"crudo": str(crudo).strip(), "campo": campo, "e164": num, "ok": ok}
+    return {"crudo": "", "campo": "", "e164": "", "ok": False}
+
+
+# ─── Descubrimiento del campo "día de visita" ────────────────
+_RX_DIA_VISITA = re.compile(
+    r"visit|d[ií]a|day|ruta|route|reparto|frecuen|jornada|zona|recorrid|preventa",
+    re.IGNORECASE,
+)
+_TIPOS_AGRUPABLES = ("selection", "char", "many2one", "many2many", "one2many", "boolean", "integer")
+
+
+def _fields_partner(models, uid):
+    return models.execute_kw(
+        ODOO_DB, uid, ODOO_PASS, "res.partner", "fields_get", [],
+        {"attributes": ["string", "type", "selection", "relation", "store"]},
+    )
+
+
+@app.get("/api/agente/campos")
+def get_agente_campos():
+    """Paso 1: identificar juntos el campo del día de visita.
+    Lista los campos de res.partner que suenan a día/ruta/visita, con los
+    valores que hoy tienen cargados los clientes y cuántos hay en cada uno,
+    así se elige el correcto sin adivinar."""
+    uid, models = odoo_connect()
+    campos = _fields_partner(models, uid)
+
+    candidatos = []
+    for name, meta in campos.items():
+        tipo = meta.get("type")
+        if tipo not in _TIPOS_AGRUPABLES:
+            continue
+        etiqueta = meta.get("string") or name
+        if not (_RX_DIA_VISITA.search(name) or _RX_DIA_VISITA.search(etiqueta)):
+            continue
+        candidatos.append({
+            "name": name,
+            "string": etiqueta,
+            "type": tipo,
+            "relation": meta.get("relation") or "",
+            "selection": [{"valor": v, "etiqueta": l} for v, l in (meta.get("selection") or [])],
+            "es_custom": name.startswith("x_"),
+            "valores": [],
+        })
+
+    # Para cada candidato, qué valores hay cargados hoy y en cuántos clientes.
+    dominio_cli = [["customer_rank", ">", 0], ["active", "=", True]]
+    for c in candidatos[:25]:
+        try:
+            grupos = models.execute_kw(
+                ODOO_DB, uid, ODOO_PASS, "res.partner", "read_group",
+                [dominio_cli, [c["name"]], [c["name"]]], {"lazy": True},
+            )
+            valores = []
+            for g in grupos:
+                v = g.get(c["name"])
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    v = v[1]
+                valores.append({
+                    "valor": "(vacío)" if v in (False, None, "") else str(v),
+                    "cantidad": g.get("__count") or g.get(c["name"] + "_count") or 0,
+                })
+            valores.sort(key=lambda x: -x["cantidad"])
+            c["valores"] = valores[:20]
+        except Exception as e:
+            c["valores"] = []
+            c["error"] = str(e)[:160]
+
+    # Las etiquetas de contacto son la otra forma habitual de marcar el día.
+    etiquetas = []
+    try:
+        cats = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASS, "res.partner.category", "search_read",
+            [[]], {"fields": ["id", "name"], "limit": 200},
+        )
+        etiquetas = [{"id": c["id"], "name": c["name"]} for c in cats]
+    except Exception:
+        pass
+
+    # Orden: primero los campos custom (x_studio_...), que es donde suele estar.
+    candidatos.sort(key=lambda c: (not c["es_custom"], -sum(v["cantidad"] for v in c["valores"])))
+
+    return {
+        "candidatos": candidatos,
+        "etiquetas": etiquetas,
+        "config": cargar_agente_config(),
+        "total_campos": len(campos),
+    }
+
+
+class AgenteConfigBody(BaseModel):
+    campo_dia_visita: str = None
+    mensaje: str = None
+
+
+@app.post("/api/agente/config")
+def post_agente_config(body: AgenteConfigBody):
+    cfg = cargar_agente_config()
+    if body.campo_dia_visita is not None:
+        cfg["campo_dia_visita"] = body.campo_dia_visita.strip()
+    if body.mensaje is not None:
+        cfg["mensaje"] = body.mensaje
+    guardar_agente_config(cfg)
+    cache_del("agente_clientes")
+    return {"ok": True, "config": cfg}
+
+
+class SeleccionBody(BaseModel):
+    seleccionados: list[int]
+
+
+@app.post("/api/agente/seleccion")
+def post_agente_seleccion(body: SeleccionBody):
+    cfg = cargar_agente_config()
+    cfg["seleccionados"] = sorted({int(x) for x in body.seleccionados})
+    guardar_agente_config(cfg)
+    return {"ok": True, "cantidad": len(cfg["seleccionados"])}
+
+
+# ─── Clientes del agente ─────────────────────────────────────
+def _dias_de_valor(valor, nombres_rel):
+    """Normaliza el valor del campo día de visita a una lista de etiquetas,
+    sirva el campo un solo día (selection/char/many2one) o varios (many2many)."""
+    if valor in (False, None, ""):
+        return []
+    if isinstance(valor, (list, tuple)):
+        if len(valor) == 2 and isinstance(valor[0], int) and isinstance(valor[1], str):
+            return [valor[1]]  # many2one
+        return [nombres_rel.get(v, str(v)) for v in valor]  # many2many / one2many
+    texto = str(valor).strip()
+    if not texto:
+        return []
+    partes = [t.strip() for t in re.split(r"[,;/|]| y ", texto) if t.strip()]
+    return partes or [texto]
+
+
+def build_agente_clientes(uid, models):
+    cfg = cargar_agente_config()
+    campo = (cfg.get("campo_dia_visita") or "").strip()
+    campos_meta = _fields_partner(models, uid)
+
+    base = ["id", "name", "phone", "mobile", "email", "street", "street2", "city",
+            "zip", "state_id", "partner_latitude", "partner_longitude",
+            "category_id", "user_id", "vat"]
+    pedir = [f for f in base if f in campos_meta]
+    campo_ok = bool(campo) and campo in campos_meta
+    if campo_ok and campo not in pedir:
+        pedir.append(campo)
+
+    partners = odoo_call(
+        models, uid, "res.partner", "search_read",
+        [["customer_rank", ">", 0], ["active", "=", True]],
+        pedir, limit=20000,
+    )
+
+    # Si el día de visita vive en un campo relacional, resolvemos los nombres.
+    nombres_rel = {}
+    if campo_ok and campos_meta[campo].get("type") in ("many2many", "one2many"):
+        rel = campos_meta[campo].get("relation")
+        ids_rel = set()
+        for p in partners:
+            v = p.get(campo)
+            if isinstance(v, list):
+                ids_rel.update(v)
+        if rel and ids_rel:
+            try:
+                regs = models.execute_kw(
+                    ODOO_DB, uid, ODOO_PASS, rel, "read",
+                    [sorted(ids_rel)], {"fields": ["display_name"]},
+                )
+                nombres_rel = {r["id"]: r.get("display_name") or str(r["id"]) for r in regs}
+            except Exception:
+                pass
+
+    # Nombres de las etiquetas de contacto (sirven como agrupador extra).
+    nombres_cat = {}
+    ids_cat = {t for p in partners for t in (p.get("category_id") or [])}
+    if ids_cat:
+        try:
+            cats = models.execute_kw(
+                ODOO_DB, uid, ODOO_PASS, "res.partner.category", "read",
+                [sorted(ids_cat)], {"fields": ["name"]},
+            )
+            nombres_cat = {c["id"]: c["name"] for c in cats}
+        except Exception:
+            pass
+
+    # Última compra (365 días) para saber a quién conviene escribirle.
+    ultima_compra = {}
+    try:
+        desde = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+        ordenes = odoo_call(
+            models, uid, "sale.order", "search_read",
+            [["state", "in", ["sale", "done"]], ["date_order", ">=", desde]],
+            ["partner_id", "date_order", "amount_total"], limit=50000,
+        )
+        for o in ordenes:
+            if not o.get("partner_id"):
+                continue
+            pid = o["partner_id"][0]
+            reg = ultima_compra.setdefault(pid, {"fecha": None, "monto_365d": 0.0, "ordenes": 0})
+            reg["monto_365d"] += o.get("amount_total") or 0
+            reg["ordenes"] += 1
+            f = (o.get("date_order") or "")[:10]
+            if f and (reg["fecha"] is None or f > reg["fecha"]):
+                reg["fecha"] = f
+    except Exception:
+        pass
+
+    geo_manual = cfg.get("geo") or {}
+    seleccionados = set(cfg.get("seleccionados") or [])
+    hoy = date.today()
+    out = []
+    for p in partners:
+        pid = p["id"]
+        dias = _dias_de_valor(p.get(campo) if campo_ok else None, nombres_rel)
+        tel = _primer_telefono(p)
+
+        lat = p.get("partner_latitude") or 0
+        lon = p.get("partner_longitude") or 0
+        origen_geo = "odoo"
+        if not lat or not lon:
+            man = geo_manual.get(str(pid))
+            if man:
+                lat, lon, origen_geo = man[0], man[1], "geocodificado"
+            else:
+                lat, lon, origen_geo = 0, 0, ""
+
+        uc = ultima_compra.get(pid, {})
+        dias_sin_comprar = None
+        if uc.get("fecha"):
+            try:
+                dias_sin_comprar = (hoy - date.fromisoformat(uc["fecha"])).days
+            except Exception:
+                pass
+
+        direccion = ", ".join([x for x in [p.get("street"), p.get("street2"), p.get("city"),
+                                           (p.get("state_id") or [None, ""])[1] if p.get("state_id") else ""] if x])
+
+        out.append({
+            "id": pid,
+            "nombre": p.get("name") or "",
+            "dias_visita": dias,
+            "telefono": tel["e164"],
+            "telefono_crudo": tel["crudo"],
+            "telefono_campo": tel["campo"],
+            "telefono_ok": tel["ok"],
+            "email": p.get("email") or "",
+            "direccion": direccion,
+            "ciudad": p.get("city") or "",
+            "lat": lat,
+            "lon": lon,
+            "origen_geo": origen_geo,
+            "vendedor": (p.get("user_id") or [None, ""])[1] if p.get("user_id") else "",
+            "etiquetas": [nombres_cat.get(t, str(t)) for t in (p.get("category_id") or [])],
+            "ultima_compra": uc.get("fecha"),
+            "dias_sin_comprar": dias_sin_comprar,
+            "monto_365d": round(uc.get("monto_365d", 0.0), 2),
+            "seleccionado": pid in seleccionados,
+        })
+
+    out.sort(key=lambda c: (-(c["monto_365d"] or 0), c["nombre"]))
+
+    dias_disponibles = sorted({d for c in out for d in c["dias_visita"]})
+    return {
+        "clientes": out,
+        "dias": dias_disponibles,
+        "config": cfg,
+        "campo_configurado": campo_ok,
+        "campo_dia_visita": campo if campo_ok else "",
+        "campo_etiqueta": (campos_meta.get(campo, {}) or {}).get("string", "") if campo_ok else "",
+        "resumen": {
+            "total": len(out),
+            "con_telefono": sum(1 for c in out if c["telefono"]),
+            "sin_telefono": sum(1 for c in out if not c["telefono"]),
+            "telefono_dudoso": sum(1 for c in out if c["telefono"] and not c["telefono_ok"]),
+            "sin_geo": sum(1 for c in out if not c["lat"] or not c["lon"]),
+            "sin_dia": sum(1 for c in out if not c["dias_visita"]),
+            "seleccionados": sum(1 for c in out if c["seleccionado"]),
+        },
+    }
+
+
+@app.get("/api/agente/clientes")
+def get_agente_clientes(force: bool = False):
+    if not force:
+        cached = cache_get("agente_clientes")
+        if cached:
+            # La selección se guarda aparte: siempre se refresca sobre el caché.
+            cfg = cargar_agente_config()
+            sel = set(cfg.get("seleccionados") or [])
+            for c in cached["clientes"]:
+                c["seleccionado"] = c["id"] in sel
+            cached["resumen"]["seleccionados"] = len(
+                [c for c in cached["clientes"] if c["seleccionado"]])
+            cached["config"] = cfg
+            return cached
+    uid, models = odoo_connect()
+    data = build_agente_clientes(uid, models)
+    cache_set("agente_clientes", data)
+    return data
+
+
+# ─── Geocodificación de los que no tienen coordenadas ────────
+def _geocodificar_direccion(texto):
+    url = ("https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ar&q="
+           + urllib.parse.quote(texto))
+    req = urllib.request.Request(url, headers={"User-Agent": "kairon-dashboard/1.0 (agente de ventas)"})
+    with urllib.request.urlopen(req, timeout=12) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    if not data:
+        return None
+    return [float(data[0]["lat"]), float(data[0]["lon"])]
+
+
+@app.post("/api/agente/geocodificar")
+def post_agente_geocodificar(limite: int = 20):
+    """Busca coordenadas en OpenStreetMap para los clientes que no las tienen
+    en Odoo. Se hace de a tandas (Nominatim pide ~1 consulta por segundo)."""
+    data = get_agente_clientes()
+    cfg = cargar_agente_config()
+    geo = cfg.get("geo") or {}
+    pendientes = [c for c in data["clientes"]
+                  if (not c["lat"] or not c["lon"]) and c["direccion"] and str(c["id"]) not in geo]
+    hechos, fallados = 0, 0
+    for c in pendientes[:max(1, min(limite, 50))]:
+        try:
+            coord = _geocodificar_direccion(c["direccion"])
+            if coord:
+                geo[str(c["id"])] = coord
+                hechos += 1
+            else:
+                fallados += 1
+        except Exception:
+            fallados += 1
+        time.sleep(1.1)
+    cfg["geo"] = geo
+    guardar_agente_config(cfg)
+    cache_del("agente_clientes")
+    return {"ok": True, "geocodificados": hechos, "sin_resultado": fallados,
+            "pendientes": max(0, len(pendientes) - hechos - fallados)}
+
+
+# ─── Exportable con hipervínculos de WhatsApp ────────────────
+def _link_whatsapp(tel, nombre, dias, mensaje):
+    texto = (mensaje or MENSAJE_DEFAULT)
+    texto = texto.replace("{nombre}", nombre or "")
+    texto = texto.replace("{nombre_completo}", nombre or "")
+    texto = texto.replace("{primer_nombre}", (nombre or "").split(" ")[0])
+    texto = texto.replace("{dia}", ", ".join(dias) if dias else "")
+    return "https://wa.me/" + tel + "?text=" + urllib.parse.quote(texto)
+
+
+def _clientes_para_exportar(dias_filtro=None):
+    data = get_agente_clientes()
+    cfg = data["config"]
+    sel = [c for c in data["clientes"] if c["seleccionado"]]
+    if dias_filtro:
+        pedidos = {d.strip().lower() for d in dias_filtro.split(",") if d.strip()}
+        sel = [c for c in sel if {d.lower() for d in c["dias_visita"]} & pedidos]
+    sel.sort(key=lambda c: ((c["dias_visita"] or ["zzz"])[0].lower(), c["nombre"].lower()))
+    return sel, cfg
+
+
+@app.get("/api/agente/export")
+def get_agente_export(formato: str = "html", dias: str = None):
+    """Exportable de la campaña: un archivo con un renglón por cliente
+    seleccionado y el link directo para abrir la conversación de WhatsApp
+    con el mensaje ya escrito."""
+    sel, cfg = _clientes_para_exportar(dias)
+    if not sel:
+        raise HTTPException(status_code=400, detail="No hay clientes seleccionados para exportar")
+    mensaje = cfg.get("mensaje") or MENSAJE_DEFAULT
+    hoy = date.today().strftime("%Y-%m-%d")
+
+    if formato == "csv":
+        # Separador ";": es lo que espera Excel en configuración regional es-AR.
+        filas = ["Cliente;Dia de visita;Telefono;Ultima compra;Link WhatsApp"]
+        for c in sel:
+            link = _link_whatsapp(c["telefono"], c["nombre"], c["dias_visita"], mensaje) if c["telefono"] else "SIN TELEFONO"
+            campos = [c["nombre"], " / ".join(c["dias_visita"]), c["telefono_crudo"],
+                      c["ultima_compra"] or "", link]
+            filas.append(";".join('"' + str(x).replace('"', '""') + '"' for x in campos))
+        cuerpo = "﻿" + "\n".join(filas)
+        return Response(
+            content=cuerpo, media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="whatsapp-{hoy}.csv"'},
+        )
+
+    por_dia = defaultdict(list)
+    for c in sel:
+        por_dia[" / ".join(c["dias_visita"]) or "Sin día asignado"].append(c)
+
+    def esc(t):
+        return (str(t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace('"', "&quot;"))
+
+    bloques = []
+    for dia in sorted(por_dia):
+        filas = []
+        for c in por_dia[dia]:
+            if c["telefono"]:
+                link = _link_whatsapp(c["telefono"], c["nombre"], c["dias_visita"], mensaje)
+                accion = f'<a class="wa" href="{esc(link)}" target="_blank" rel="noopener">Abrir WhatsApp</a>'
+                tel = esc(c["telefono_crudo"])
+            else:
+                accion = '<span class="falta">Sin teléfono</span>'
+                tel = "—"
+            filas.append(
+                f'<tr><td><input type="checkbox" class="chk"></td><td>{esc(c["nombre"])}</td>'
+                f'<td class="mono">{tel}</td><td class="mono">{esc(c["ultima_compra"] or "—")}</td>'
+                f'<td>{accion}</td></tr>'
+            )
+        bloques.append(
+            f'<h2>{esc(dia)} <small>{len(por_dia[dia])} clientes</small></h2>'
+            '<table><thead><tr><th></th><th>Cliente</th><th>Teléfono</th>'
+            '<th>Última compra</th><th>Contacto</th></tr></thead><tbody>'
+            + "".join(filas) + "</tbody></table>"
+        )
+
+    sin_tel = sum(1 for c in sel if not c["telefono"])
+    html = f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaña WhatsApp — {hoy}</title>
+<style>
+body {{ font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background:#0b0d11; color:#fff; margin:0; padding:28px; }}
+h1 {{ font-size:22px; margin:0 0 4px; }}
+.sub {{ color:#8b8f9a; font-size:13px; margin-bottom:22px; }}
+.msg {{ background:#16181d; border:1px solid #282c34; border-radius:10px; padding:14px; color:#c9ccd3; font-size:13px; margin-bottom:26px; white-space:pre-wrap; }}
+h2 {{ font-size:15px; margin:26px 0 10px; color:#f5c842; }}
+h2 small {{ color:#8b8f9a; font-weight:400; font-size:12px; margin-left:8px; }}
+table {{ width:100%; border-collapse:collapse; background:#16181d; border:1px solid #282c34; border-radius:10px; overflow:hidden; }}
+th, td {{ text-align:left; padding:10px 12px; border-bottom:1px solid #282c34; font-size:14px; }}
+th {{ color:#8b8f9a; font-size:11px; text-transform:uppercase; letter-spacing:.08em; }}
+tr:last-child td {{ border-bottom:none; }}
+tr.hecho td {{ opacity:.4; text-decoration:line-through; }}
+.mono {{ font-family:'DM Mono', ui-monospace, monospace; color:#c9ccd3; }}
+a.wa {{ background:#25d366; color:#06210f; padding:6px 12px; border-radius:6px; font-weight:600; font-size:13px; text-decoration:none; display:inline-block; }}
+.falta {{ color:#ff8c42; font-size:13px; }}
+@media print {{ body {{ background:#fff; color:#000; }} table {{ background:#fff; }} a.wa {{ color:#000; }} }}
+</style></head><body>
+<h1>Campaña WhatsApp · {len(sel)} clientes</h1>
+<div class="sub">Generado el {hoy} · {sin_tel} sin teléfono cargado · tildá cada fila a medida que contactás (se guarda en este navegador)</div>
+<div class="msg"><b>Mensaje que se abre:</b><br>{esc(mensaje)}</div>
+{''.join(bloques)}
+<script>
+const K='wa-{hoy}';
+const st=JSON.parse(localStorage.getItem(K)||'[]');
+document.querySelectorAll('tbody tr').forEach((tr,i)=>{{
+  const c=tr.querySelector('.chk');
+  if(st.includes(i)){{c.checked=true;tr.classList.add('hecho');}}
+  c.addEventListener('change',()=>{{
+    tr.classList.toggle('hecho',c.checked);
+    const s=[...document.querySelectorAll('tbody tr')].map((t,j)=>t.querySelector('.chk').checked?j:-1).filter(j=>j>=0);
+    localStorage.setItem(K,JSON.stringify(s));
+  }});
+}});
+</script>
+</body></html>"""
+    return Response(
+        content=html, media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="whatsapp-{hoy}.html"'},
+    )
+
+
+@app.get("/api/agente/export/preview")
+def get_agente_export_preview(dias: str = None):
+    """Qué saldría en el exportable, sin bajarlo (para el botón de la UI)."""
+    sel, cfg = _clientes_para_exportar(dias)
+    return {
+        "total": len(sel),
+        "con_telefono": sum(1 for c in sel if c["telefono"]),
+        "sin_telefono": [c["nombre"] for c in sel if not c["telefono"]],
+        "mensaje": cfg.get("mensaje") or MENSAJE_DEFAULT,
+    }
+
 # ─── Serve frontend ─────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -1379,6 +1949,10 @@ def root():
 @app.get("/dashboard")
 def dashboard():
     return FileResponse("static/index.html", headers=NO_CACHE)
+
+@app.get("/agente")
+def agente():
+    return FileResponse("static/agente.html", headers=NO_CACHE)
 
 # Se mantiene /portal para que no se rompan los links y favoritos que
 # quedaron apuntando ahi mientras el portal se probaba.

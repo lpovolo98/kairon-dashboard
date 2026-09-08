@@ -9,6 +9,29 @@ Dashboard web con 3 módulos conectado en tiempo real a Odoo Cloud.
 | **Stock** | Stock actual · Promedio de ventas diario · Días de inventario · Semáforo rojo/amarillo/verde |
 | **Ventas** | Clientes compradores · Cajas vendidas · Recompra · Gráficos por mes · Filtro por categoría |
 | **Clientes** | Performance 90 días · Categorías que compran · Oportunidades de venta |
+| **Agente de ventas** | Clientes de Odoo agrupados por día de visita · mapa geolocalizado · selección manual de a quién contactar · exportable con links de WhatsApp |
+
+### Agente de ventas (`/agente`)
+
+Primera etapa del agente que contacta clientes: **no es autónomo**, arma la lista y
+deja los links listos para escribir uno por uno.
+
+1. **Identificar el campo del día de visita.** Odoo no trae un campo estándar para esto,
+   así que la pantalla lista los campos de `res.partner` que suenan a día / visita / ruta
+   (incluidos los `x_studio_*` de Studio y las etiquetas de contacto `category_id`),
+   con los valores que hoy tienen cargados los clientes y cuántos hay en cada uno.
+   Se elige uno y queda guardado en `agente_config.json` (volumen `/data`).
+2. **Filtrar, ver en el mapa y marcar.** Chips por día de visita, buscador, y filtros por
+   "sin teléfono", "teléfono a revisar", "sin ubicación" y "sin día". La selección se guarda
+   sola en el servidor. Los que no tienen `partner_latitude` / `partner_longitude` en Odoo se
+   pueden geolocalizar por dirección contra OpenStreetMap (botón *Geolocalizar faltantes*).
+3. **Exportar.** Genera un HTML (o CSV) con un renglón por cliente marcado, agrupado por día,
+   con el botón que abre WhatsApp con el mensaje ya escrito. Variables del mensaje:
+   `{nombre}`, `{primer_nombre}`, `{dia}`.
+
+Los teléfonos se normalizan a formato WhatsApp argentino (`549` + área + número, sacando
+el `0` de larga distancia y el `15`); los que quedan con largo raro se marcan *a revisar*
+en vez de descartarse.
 
 ---
 
@@ -107,6 +130,13 @@ El promedio usa los **últimos 60 días** de ventas confirmadas.
 | `GET /api/clientes` | Listado de clientes con análisis |
 | `GET /api/refresh` | Forzar recarga del caché |
 | `GET /api/status` | Estado del servidor y caché |
+| `GET /agente` | Agente de ventas (WhatsApp) |
+| `GET /api/agente/campos` | Campos de `res.partner` candidatos a "día de visita" + valores cargados |
+| `POST /api/agente/config` | Guardar el campo elegido y el mensaje de WhatsApp |
+| `GET /api/agente/clientes` | Clientes con día de visita, teléfono normalizado y coordenadas |
+| `POST /api/agente/seleccion` | Guardar los clientes marcados para la campaña |
+| `POST /api/agente/geocodificar` | Buscar coordenadas en OpenStreetMap para los que no las tienen |
+| `GET /api/agente/export` | Exportable `?formato=html\|csv` con los links wa.me |
 
 Todos los endpoints aceptan `?force=true` para ignorar el caché.
 
