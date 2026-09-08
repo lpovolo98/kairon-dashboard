@@ -27,13 +27,19 @@ ALIASES = {
  'Pasta Green Pea Penne':'400031','Pasta Red Lentil Fusilli':'400032',
 }
 APPROVED_DISCOUNTS = {'0a49dbb115f29745fcd1904c7cf7b44876f11bec31352d039c5493d5187a5028': Decimal('5')}
+APPROVED_CREDITS = {'4b48f946e8d1992abfd1eba937776751e318ff287ce011433513a00486a8f018': '00012-00005670'}
+APPROVED_DISCOUNTS.update({key: Decimal('5') for key in APPROVED_CREDITS})
 
 
 def read(pdf):
     texts=[p.extract_text(extraction_mode='layout') or '' for p in PdfReader(io.BytesIO(pdf)).pages]
-    if not texts or not all('STARBREAD' in t and '30-71437923-9' in t for t in texts): return None
+    if not texts or not all(('STARBREAD' in t or 'STARDBREAD' in t) and '30-71437923-9' in t for t in texts): return None
+    credit = all('notadecredito' in normalize(t) for t in texts)
+    original = APPROVED_CREDITS.get(hashlib.sha256(pdf).hexdigest())
+    if credit and not original:
+        raise ValueError('Nota de crédito: falta confirmar la factura original y si corresponde a diferencia de precio o devolución de mercadería.')
     def find(pattern,text):
-        m=re.search(pattern,text,re.M)
+        m=re.search(pattern,text,re.M | re.I)
         if not m: raise ValueError('Falta un dato obligatorio en el formato STARBREAD')
         return m.group(1)
     def number(s): return Decimal(s.replace(',',''))
@@ -76,10 +82,11 @@ def read(pdf):
     return {'comprador_cuit':find(r'IVA:Responsable[^\n]*CUIT:\s*([\d-]+)',texts[0]),
         'proveedor':{'nombre':'STARBREAD S.A.','cuit':'30-71437923-9','tipo_persona':'empresa',
             'calle':find(r'^\s*(LISANDRO[^\n]+)',texts[0]).strip(), 'localidad':'Pilar',
-            'provincia':'Buenos Aires','codigo_postal':find(r'\b(C\d{4})\s+PILAR',texts[0]),
+            'provincia':'Buenos Aires','codigo_postal':find(r'\b(C\d{4,5})\s+PILAR',texts[0]),
             'condicion_iva':'IVA Responsable Inscripto','ingresos_brutos':find(r'ING\.BRUTOS\s+CM:\s*([\d-]+)',texts[0]),
             'inicio_actividades':datetime.strptime(find(r'INICIO\s+DE\s+ACT:\s*([\d/]+)',texts[0]),'%d/%m/%Y').date().isoformat()},
-        'comprobante':{'clase':'fiscal','tipo':'FACTURA','letra':'A','numero':headers[0][0],
+        'comprobante':{'clase':'fiscal','tipo':'NOTA_CREDITO' if credit else 'FACTURA','letra':'A','numero':headers[0][0],
+            **({'factura_original': original, 'motivo_credito': 'diferencia_precio'} if credit else {}),
             'fecha':issued.isoformat(),'fecha_vencimiento':(issued+timedelta(days=days)).isoformat(),
             'condicion_venta':str(days)+' DIAS FECHA FACTURA','cae':headers[0][2],
             'cae_vencimiento':datetime.strptime(find(r'VTO:\s*([\d/]+)',texts[0]),'%d/%m/%Y').date().isoformat(),'moneda':'ARS'},

@@ -168,13 +168,23 @@ async def upload(request: Request, owner=Depends(authorize)):
             'created_at': datetime.now(timezone.utc).isoformat()}
     with lock, connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        if db.execute('SELECT id FROM jobs WHERE id=?', (job_id,)).fetchone():
-            raise HTTPException(409, 'Este PDF ya fue recibido. Revisá el historial antes de volver a cargarlo.')
+        previous = db.execute('SELECT owner,data FROM jobs WHERE id=?', (job_id,)).fetchone()
+        if previous:
+            old = json.loads(previous[1])
+            retryable = previous[0] == owner and old.get('state') == 'revision' and not any(
+                old.get(key) for key in ('supplier_id','purchase_id','move_id','original_move_id','picking_ids'))
+            if not retryable:
+                raise HTTPException(409, 'Este PDF ya fue recibido. Revisá el historial antes de volver a cargarlo.')
+            data['previous_attempts'] = old.get('previous_attempts', []) + [{
+                'state':old['state'], 'message':old.get('message'), 'created_at':old.get('created_at')}]
         # Bound queue memory and prevent unbounded paid extraction requests.
         active = db.execute("SELECT count(*) FROM jobs WHERE json_extract(data, '$.state') IN ('recibido','leyendo','validando','creando_proveedor','creando_orden','confirmando_orden','creando_factura','verificando','contabilizando')").fetchone()[0]
         if active >= 10:
             raise HTTPException(429, 'Hay varias facturas en proceso. Intentá más tarde.')
-        db.execute('INSERT INTO jobs VALUES (?,?,?)', (job_id, owner, json.dumps(data)))
+        if previous:
+            db.execute('UPDATE jobs SET data=? WHERE id=?', (json.dumps(data), job_id))
+        else:
+            db.execute('INSERT INTO jobs VALUES (?,?,?)', (job_id, owner, json.dumps(data)))
     try:
         executor.submit(work, job_id, pdf)
     except Exception:

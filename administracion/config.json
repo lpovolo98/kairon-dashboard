@@ -37,6 +37,7 @@
     "percepcion_iibb": null
   },
   "tipos_documento": {
+    "nota_credito_a": {"id": 3, "nombre": "CREDIT NOTES A"},
     "factura_a": {
       "id": 1,
       "nombre": "INVOICES A"

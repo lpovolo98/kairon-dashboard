@@ -153,5 +153,18 @@ class API(unittest.TestCase):
         self.assertEqual(rows[0]['state'], 'resultado_incierto')
         self.assertEqual(rows[0]['purchase_id'], 11)
 
+    def test_retry_only_before_any_write(self):
+        writer=PdfWriter(); writer.add_blank_page(width=100,height=100)
+        stream=io.BytesIO(); writer.write(stream)
+        with patch.object(api.executor,'submit') as submit:
+            first=self.client.post('/api/administracion/facturas',headers=self.headers,content=stream.getvalue()).json()
+            api.save(first['id'],state='revision',message='Lectura no soportada')
+            retried=self.client.post('/api/administracion/facturas',headers=self.headers,content=stream.getvalue())
+            self.assertEqual(retried.status_code,202)
+            self.assertEqual(len(retried.json()['previous_attempts']),1)
+            api.save(first['id'],state='revision',move_id=42)
+            self.assertEqual(self.client.post('/api/administracion/facturas',headers=self.headers,content=stream.getvalue()).status_code,409)
+            self.assertEqual(submit.call_count,2)
+
 
 if __name__ == '__main__': unittest.main()

@@ -3,16 +3,34 @@ let ready = false;
 let selected = null;
 const $ = id => document.getElementById(id);
 async function api(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
+  const headers = { Accept: 'application/json', ...(options.headers || {}) };
   if (accessToken) headers.Authorization = 'Bearer ' + accessToken;
-  const response = await fetch('/api/administracion/' + path, {...options, headers});
-  const data = await response.json();
+  let response;
+  const uncertain = options.method === 'POST' ? ' Antes de repetir la carga, actualizá el historial para comprobar si fue recibida.' : '';
+  try {
+    response = await fetch('/api/administracion/' + path, {...options, headers, credentials: 'same-origin', redirect: 'manual'});
+  } catch {
+    throw new Error('No se pudo conectar con el portal.' + uncertain);
+  }
+  if (response.type === 'opaqueredirect' || response.status === 401 || response.status === 403) {
+    throw new Error('Tu acceso necesita verificación. Volvé a ingresar al portal y actualizá el historial.' + uncertain);
+  }
+  const type = response.headers.get('content-type') || '';
+  if (!type.includes('application/json')) {
+    const reason = response.status >= 500
+      ? 'El servicio no está disponible en este momento.'
+      : 'El portal devolvió una página en lugar del resultado. Volvé a ingresar al portal y actualizá el historial.';
+    throw new Error(reason + uncertain);
+  }
+  let data;
+  try { data = await response.json(); }
+  catch { throw new Error('La respuesta del servicio llegó incompleta.' + uncertain); }
   if (!response.ok) throw new Error(data.detail || 'No se pudo completar la operación');
   return data;
 }
 function choose(file) {
   selected = file;
-  $('filename').textContent = file ? file.name : 'Arrastrá tu factura acá';
+  $('filename').textContent = file ? file.name : 'Arrastrá tu comprobante acá';
   $('submit').disabled = !ready || !file;
 }
 $('pdf').addEventListener('change', event => choose(event.target.files[0]));
@@ -33,10 +51,10 @@ $('upload').addEventListener('submit', async event => {
     $('notice').textContent = 'Seleccioná un PDF de hasta 15 MB.'; return;
   }
   $('submit').disabled = true;
-  $('notice').textContent = 'Enviando factura…';
+  $('notice').textContent = 'Enviando comprobante…';
   try {
     await api('facturas', {method: 'POST', headers: {'Content-Type': 'application/pdf'}, body: selected});
-    $('notice').textContent = 'Factura recibida. Podés seguir el avance en el historial.';
+    $('notice').textContent = 'Comprobante recibido. Podés seguir el avance en el historial.';
     choose(null); $('pdf').value = ''; await history();
   } catch (error) { $('notice').textContent = error.message; }
   finally { $('submit').disabled = !ready || !selected; }
@@ -58,7 +76,7 @@ async function history() {
       const title = document.createElement('b');
       title.textContent = row.document ? row.document.proveedor.nombre : 'Factura recibida';
       const subtitle = document.createElement('p');
-      subtitle.textContent = row.document ? row.document.comprobante.numero + ' · ' + new Intl.NumberFormat('es-AR', {style:'currency',currency:'ARS'}).format(row.document.totales.total) : new Date(row.created_at).toLocaleString('es-AR');
+      subtitle.textContent = row.document ? (row.document.comprobante.tipo === 'NOTA_CREDITO' ? 'Nota de crédito · ' : row.document.comprobante.clase === 'interno' ? 'Compra interna · ' : 'Factura · ') + row.document.comprobante.numero + ' · ' + new Intl.NumberFormat('es-AR', {style:'currency',currency:'ARS'}).format(row.document.totales.total) : new Date(row.created_at).toLocaleString('es-AR');
       const message = document.createElement('p'); message.textContent = row.message;
       text.append(title, subtitle, message);
       if (row.document) {
@@ -71,7 +89,8 @@ async function history() {
           'CUIT proveedor: ' + d.proveedor.cuit,
           'CUIT receptor: ' + d.comprador_cuit,
           'Fecha: ' + d.comprobante.fecha + ' · Vencimiento: ' + (d.comprobante.fecha_vencimiento || 'No indicado'),
-          'CAE: ' + d.comprobante.cae + ' · Vence: ' + d.comprobante.cae_vencimiento,
+          ...(d.comprobante.cae ? ['CAE: ' + d.comprobante.cae + ' · Vence: ' + (d.comprobante.cae_vencimiento || 'No indicado')] : ['Comprobante sin validez fiscal']),
+          ...(d.comprobante.factura_original ? ['Factura original: ' + d.comprobante.factura_original, 'Diferencia de precio · Sin movimiento de stock'] : []),
           '', ...d.lineas.map(l => l.codigo_proveedor + ' · ' + l.descripcion + '\nCantidad: ' + (l.cantidad_unidades ?? l.cantidad) + ' · Precio: $' + l.precio_unitario.toLocaleString('es-AR') + ' · Descuento: ' + (l.bonificacion_pct || 0) + '% · Neto: $' + l.subtotal.toLocaleString('es-AR')),
           '', 'Neto: $' + d.totales.neto.toLocaleString('es-AR') + ' · IVA: $' + d.totales.iva.toLocaleString('es-AR'),
           'Total: $' + d.totales.total.toLocaleString('es-AR'),
@@ -103,7 +122,7 @@ async function history() {
 async function init() {
   try {
     const status = await api('status'); ready = status.ready;
-    $('connection').textContent = ready ? '● Odoo producción · Facturas en borrador · Compras con recepción pendiente' + (status.reader !== 'general' ? ' · Lectura: Cibos y Starbread.' : '') : 'Pendiente de configuración para comenzar a cargar facturas';
+    $('connection').textContent = ready ? '● Odoo producción · Comprobantes en borrador · Recepciones pendientes' + (status.reader !== 'general' ? ' · Formatos habilitados: Cibos, Starbread y presupuesto Almadre confirmado.' : '') : 'Pendiente de configuración para comenzar a cargar comprobantes';
     $('connection').classList.toggle('online', ready);
     $('submit').disabled = !ready || !selected;
     await history();

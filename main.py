@@ -1349,7 +1349,7 @@ def status():
     return {
         "ok": True,
         "administracion": {
-            "version": "2026-09-08.1",
+            "version": "2026-09-08.2",
             "modo": "compra-confirmada-factura-borrador",
             "odoo_configurado": bool(ODOO_URL and ODOO_DB and ODOO_USER and ODOO_PASS),
             "volumen_datos": os.path.ismount("/data"),

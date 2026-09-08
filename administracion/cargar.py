@@ -210,7 +210,7 @@ def verificar_duplicado(o: Odoo, partner_id: int, doc: dict, inf: Informe,
 
     existentes = o.buscar_leer(
         "account.move",
-        [["move_type", "in", ["in_invoice", "in_refund"]], ["partner_id", "=", partner_id]],
+        [["move_type", "=", "in_refund" if doc['comprobante'].get('tipo') == 'NOTA_CREDITO' else "in_invoice"], ["partner_id", "=", partner_id]],
         campos,
     )
 
@@ -543,6 +543,8 @@ def elegir_diario(o: Odoo, doc: dict, cfg: dict, inf: Informe) -> dict:
 
 def resolver_impuestos(o: Odoo, doc: dict, cfg: dict, inf: Informe) -> dict:
     """Devuelve los IDs de impuestos a aplicar por alícuota, más las percepciones."""
+    if doc['comprobante'].get('clase') == 'interno':
+        return {'por_alicuota': {}, 'percepciones': []}
     inf.titulo("7 · Impuestos")
     imp_cfg = cfg.get("impuestos") or {}
     mapa: dict[float, int] = {}
@@ -605,7 +607,7 @@ def crear_orden_compra(o: Odoo, doc: dict, proveedor: dict, resueltas: list[dict
         tax = impuestos["por_alicuota"].get(r["factura"].get("alicuota_iva", 0))
         extras = [p["tax_id"] for p in impuestos["percepciones"]]
         ids = [t for t in ([tax] + extras) if t]
-        if ids and campo_tax:
+        if campo_tax:
             vals[campo_tax] = [(6, 0, ids)]
         elif ids:
             inf.alerta("purchase.order.line no tiene campo de impuestos: la OC queda sin IVA.")
@@ -642,7 +644,7 @@ def crear_orden_compra(o: Odoo, doc: dict, proveedor: dict, resueltas: list[dict
 
 def crear_factura(o: Odoo, doc: dict, proveedor: dict, resueltas: list[dict],
                   impuestos: dict, diario: dict, cfg: dict, oc_id: int | None,
-                  vinculada: bool, inf: Informe) -> int:
+                  vinculada: bool, inf: Informe, *, original_id=None) -> int:
     inf.titulo("9 · Factura de proveedor")
     comp = doc["comprobante"]
     campo_uom = o.primer_campo("account.move.line", "product_uom_id")
@@ -667,8 +669,7 @@ def crear_factura(o: Odoo, doc: dict, proveedor: dict, resueltas: list[dict],
         tax = impuestos["por_alicuota"].get(r["factura"].get("alicuota_iva", 0))
         extras = [p["tax_id"] for p in impuestos["percepciones"]]
         ids = [t for t in ([tax] + extras) if t]
-        if ids:
-            vals["tax_ids"] = [(6, 0, ids)]
+        vals["tax_ids"] = [(6, 0, ids)]
         if r["factura"].get("bonificacion_pct") and o.tiene("account.move.line", "discount"):
             vals["discount"] = r["factura"]["bonificacion_pct"]
         if vinculada and o.tiene("account.move.line", "purchase_line_id"):
@@ -678,7 +679,7 @@ def crear_factura(o: Odoo, doc: dict, proveedor: dict, resueltas: list[dict],
         lineas.append((0, 0, vals))
 
     mv = {
-        "move_type": "in_invoice",
+        "move_type": "in_refund" if comp.get('tipo') == 'NOTA_CREDITO' else "in_invoice",
         "partner_id": proveedor["id"],
         "journal_id": diario["id"],
         "invoice_date": comp["fecha"],
@@ -686,6 +687,8 @@ def crear_factura(o: Odoo, doc: dict, proveedor: dict, resueltas: list[dict],
         "ref": f"{comp.get('prefijo_ref', '')}{comp['numero']}",
         "invoice_line_ids": lineas,
     }
+    if original_id:
+        mv['reversed_entry_id'] = original_id
     if comp.get("fecha_vencimiento"):
         mv["invoice_date_due"] = comp["fecha_vencimiento"]
     if o.tiene("account.move", "invoice_origin") and oc_id:
@@ -696,7 +699,7 @@ def crear_factura(o: Odoo, doc: dict, proveedor: dict, resueltas: list[dict],
     if diario.get("l10n_latam_use_documents") and o.tiene("account.move", "l10n_latam_document_number"):
         mv["l10n_latam_document_number"] = comp["numero"]
         tipo = (cfg.get("tipos_documento") or {}).get(
-            f"factura_{(comp.get('letra') or '').lower()}"
+            f"{'nota_credito' if comp.get('tipo') == 'NOTA_CREDITO' else 'factura'}_{(comp.get('letra') or '').lower()}"
         )
         if tipo and tipo.get("id"):
             mv["l10n_latam_document_type_id"] = tipo["id"]
