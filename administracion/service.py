@@ -15,6 +15,11 @@ from .odoo import Odoo
 
 ROOT = Path(__file__).resolve().parent
 
+class ProductosPendientes(loader.Frenar):
+    def __init__(self, lineas, proveedor):
+        super().__init__('Faltan equivalencias de productos. Resolvelas en el agente de productos para continuar.')
+        self.lineas=lineas;self.proveedor=proveedor
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
@@ -210,6 +215,8 @@ def process(doc, pdf, save, o=None, cfg=None, *, post=False, validate_only=False
              document=doc, move_id=move['id'], existing_state=move['state'], existing_total=move['amount_total'])
         return
     loader.verificar_duplicado(o, supplier['id'], doc, inf, False, simulacion=False)
+    missing=[line for line in doc['lineas'] if not o.producto_por_codigo_proveedor(supplier['id'],line['codigo_proveedor'])]
+    if missing: raise ProductosPendientes(missing,supplier)
     lines = loader.resolver_lineas(o, doc, supplier, cfg, inf)
     price_report = loader.Informe()
     if not credit:

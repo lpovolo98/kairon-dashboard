@@ -36,7 +36,7 @@ def _filas_de_hoja(ws, clave):
         # Igual que el script original: una fila sin la columna clave es un
         # resto de formato, no un dato.
         if not registro.get(clave):
-            continue
+            raise ValueError(f'La hoja {ws.title} contiene una fila con datos sin SKU. Corregila antes de cargar.')
         filas.append({k: ("" if v is None else v) for k, v in registro.items()})
         if len(filas) > TOPE_FILAS:
             raise ValueError(f"La hoja «{ws.title}» tiene más de {TOPE_FILAS} filas.")
@@ -85,7 +85,8 @@ def leer_csv(datos):
         dialecto = csv.excel
     filas = [dict(f) for f in csv.DictReader(io.StringIO(texto), dialect=dialecto)]
     clave = columna_clave("productos")
-    filas = [f for f in filas if str(f.get(clave) or "").strip()][:TOPE_FILAS]
+    if len(filas)>TOPE_FILAS: raise ValueError(f'El CSV supera las {TOPE_FILAS} filas. No se recortó el archivo.')
+    if any(not str(f.get(clave) or '').strip() for f in filas): raise ValueError('El CSV contiene filas sin SKU.')
     if not filas:
         raise ValueError(f"No encontré filas con la columna «{clave}».")
     return {"productos": filas, "proveedores": [], "precios": []}

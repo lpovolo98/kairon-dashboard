@@ -8,6 +8,8 @@ API sin pasar por la pantalla, no el mecanismo principal de control.
 import base64
 import binascii
 import re
+import io
+from PIL import Image, ImageOps
 
 from .cargar import buscar_producto_por_sku
 
@@ -30,9 +32,19 @@ def decodificar(imagen):
         raise ValueError("Imagen vacía.")
     if len(datos) > TOPE_BYTES:
         raise ValueError(f"La imagen pesa {len(datos) // 1024} KB y el tope es {TOPE_BYTES // 1024} KB.")
-    if not any(datos.startswith(f) for f in FIRMAS):
-        raise ValueError("El archivo no es una imagen JPG, PNG ni WEBP.")
-    return limpio, datos
+    try:
+        with Image.open(io.BytesIO(datos)) as source:
+            if source.format not in ('JPEG','PNG','WEBP') or source.width*source.height>25000000:
+                raise ValueError('Formato o dimensiones no admitidos.')
+            source.load()
+            im=ImageOps.exif_transpose(source).convert('RGBA')
+            im.thumbnail((1600,1600))
+            background=Image.new('RGB',im.size,'white'); background.paste(im,mask=im.getchannel('A'))
+            stream=io.BytesIO(); background.save(stream,format='JPEG',quality=85)
+    except Exception:
+        raise ValueError('La imagen no es válida o supera los 25 millones de píxeles.')
+    datos=stream.getvalue()
+    return base64.b64encode(datos).decode(), datos
 
 
 def sin_imagen(odoo, limite=500):
@@ -46,21 +58,25 @@ def sin_imagen(odoo, limite=500):
 
 def aplicar(odoo, asignaciones):
     """asignaciones: [{'sku': ..., 'imagen': <data url o base64>}]"""
+    from .cargar import Frenar
     subidas, errores, deshacer = [], [], {"modificados": []}
+    prepared=[]; seen=set()
     for a in asignaciones:
         sku = str(a.get("sku") or "").strip()
-        if not sku:
-            continue
+        if not sku or sku.casefold() in seen:
+            raise Frenar('Cada imagen debe tener un SKU distinto y no vacío.')
+        seen.add(sku.casefold())
         try:
             b64, _ = decodificar(a.get("imagen"))
         except ValueError as e:
-            errores.append(f"{sku}: {e}")
-            continue
+            raise Frenar(f'{sku}: {e}')
 
         tmpl = buscar_producto_por_sku(odoo, sku, errores)
-        if not tmpl:
-            errores.append(f"No hay ningún producto con la Referencia interna «{sku}».")
-            continue
+        if not tmpl or errores:
+            raise Frenar('; '.join(errores) or f'No existe el SKU {sku}.')
+        prepared.append((sku,tmpl,b64))
+
+    for sku,tmpl,b64 in prepared:
 
         # La imagen anterior se guarda para poder revertir: pisar una foto
         # buena por error es el accidente más probable de esta pantalla.

@@ -1,115 +1,41 @@
 # Agente de productos
 
-Pantalla `/productos`, integrada al portal. Alta y modificación masiva de
-artículos en Odoo desde un archivo, un pegado de Excel o el formulario, más la
-carga de fotos.
+## Flujo
 
-Porta la lógica de `cargar_catalogo.py` —el script que hasta ahora se corría a
-mano— y agrega lo que ese script no hacía: comparar contra el producto
-existente para separar altas de modificaciones. El script original, si el SKU
-ya existía, lo salteaba: modificar era trabajo manual en Odoo.
+Archivo XLSX/CSV, pegado o modificación por filtro → revisión completa de las tres hojas → confirmación → trabajo en segundo plano → historial persistente.
 
-## Garantías
+La revisión devuelve una huella que se comprueba nuevamente contra Odoo antes de ejecutar. Cada escritura registra su intención antes del RPC, su resultado y el valor previo. Una petición con la misma clave devuelve la misma corrida. Los resultados inciertos nunca se reejecutan automáticamente.
 
-**Previsualizar nunca escribe.** No es una convención: `previsualizar()` recibe
-el cliente de Odoo envuelto en `SoloLectura`, que levanta `AssertionError` ante
-cualquier `create`, `write` o `unlink`. Está cubierto por dos tests.
+## Reversión
 
-**Una fila sin cambios no se toca.** Cada campo se compara con el valor real en
-Odoo, normalizando números (`1740`, `"1740.00"` y `"1.740,00"` son lo mismo).
-Sin esa comparación toda fila parecería modificada y se reescribiría el
-catálogo entero.
+Las corridas nuevas comprueban conflictos antes de revertir. Se restauran los campos modificados, se archivan los productos nuevos y se eliminan únicamente los vínculos comerciales nuevos que no cambiaron. La pantalla muestra esas acciones antes de confirmarlas. Una interrupción o un conflicto requiere revisión: no se promete una reversión incondicional. Las corridas anteriores sin registro verificable requieren revisión manual en Odoo.
 
-**El navegador manda filas, no escrituras.** `aplicar` vuelve a previsualizar
-del lado del servidor y recién ahí escribe: un cuerpo manipulado no puede pedir
-una escritura arbitraria. Las claves internas del plan no salen en la respuesta.
+Todas las escrituras de catálogo, fotos y reversión usan el mismo bloqueo. Las ediciones realizadas directamente en Odoo se comprueban antes de escribir; XML-RPC no ofrece una transacción única con SQLite.
 
-**Toda corrida se revierte.** Se guarda el valor previo de cada campo
-modificado y el id de cada registro creado. Revertir devuelve los campos y
-*archiva* lo creado: no borra, porque un producto con movimientos no se puede
-borrar y archivar sí es reversible.
+## Validación
 
-**Con una sola fila en error no se escribe nada.** Ni las filas buenas.
+Máximo de 300 filas entre las tres hojas por defecto. Cantidades por caja positivas, números finitos no negativos, booleanos explícitos, impuestos separados por alcance e IDs validados. Los SKU se comparan sin mayúsculas y se consultan también archivados. Reglas ambiguas requieren revisión.
 
-## Problemas reales que resuelve, heredados del script
-
-- **SKU con espacios.** Hay códigos cargados en Odoo con un espacio pegado. Una
-  búsqueda exacta no los encuentra y se crea un duplicado con el mismo código a
-  la vista. La búsqueda es tolerante y, si hay más de una coincidencia, frena.
-- **Nombres ambiguos.** Dos categorías con el mismo nombre frenan la fila y
-  piden desambiguar con `Categoría (id 42)`.
-- **Impuestos homónimos.** «IVA 21%» existe en venta y en compra. La caché del
-  resolvedor distingue el alcance; si no, el segundo hereda el id del primero y
-  asigna el impuesto equivocado sin ningún aviso.
-- **Nombres que no existen.** El error propone los parecidos, y en la pantalla
-  la celda es directamente un desplegable con los valores válidos de Odoo.
+Una celda opcional vacía conserva el dato. Para quitar impuestos o un texto opcional, usar `[VACIAR]`. Se rechazan columnas desconocidas y filas con datos sin SKU. Los filtros demasiado amplios se rechazan explícitamente; no se truncan silenciosamente. Los catálogos se consultan por páginas y las previsualizaciones grandes agrupan búsquedas de productos.
 
 ## Imágenes
 
-El achicado a 1600 px ocurre **en el navegador**, con los mismos parámetros que
-`achicar_imagenes.py`: el original nunca sale de la máquina. El servidor valida
-firma y tamaño como red de contención, no como mecanismo principal.
+La pantalla reduce las fotos y el servidor las decodifica, valida y normaliza. Límite de lote 20 MB y de imagen 4 MB, con hasta 25 millones de píxeles de entrada. Cada SKU recibe una única foto por lote. Las sugerencias por nombre requieren selección. El historial guarda referencias a archivos de imágenes, no sus cuerpos completos en las respuestas.
 
-El diccionario `MAPEO` de `organizar_imagenes.py` lo reemplaza un emparejado
-automático: primero busca el SKU dentro del nombre del archivo, después compara
-palabra por palabra contra los nombres de producto, dando prioridad a las
-palabras que identifican a un solo producto. Lo que no reconoce se resuelve en
-un tablero de dos clicks. La lista de productos sin foto se consulta a Odoo, así
-que tampoco hay que mantener `SIN_IMAGEN` a mano.
+## Administración
 
-Al pisar una foto se guarda la anterior: revertir la devuelve.
+Un comprobante con códigos faltantes queda esperando productos antes de crear su compra. La cola conserva proveedor, código y referencias de los comprobantes. Desde Productos se prepara un alta o un vínculo con un SKU existente. Al resolver todas las equivalencias, se retoma el documento original y se repiten los controles de Odoo. Si ya tiene compra o factura, no se retoma automáticamente.
 
-## Valores fijos al crear
-
-Están en `esquema.py`, visibles y discutibles, no escondidos en el código:
-
-    type=consu · is_storable=True · invoice_policy=order · sale_ok · purchase_ok
+El PDF original se conserva en el directorio administrativo para permitir esta continuación. No se vuelven a inferir sus datos durante la continuación.
 
 ## Configuración
 
-Reutiliza las variables de Odoo que ya existen y la identidad que el middleware
-del portal verifica contra Cloudflare Access: no hay login propio.
+Se reutilizan ODOO_URL, ODOO_DB, ODOO_USER y ODOO_KEY u ODOO_PASSWORD. La identidad se verifica en el middleware del portal. PRODUCTOS_ALLOWED_EMAILS restringe acceso si se configura.
 
-- `PRODUCTOS_ALLOWED_EMAILS`: correos habilitados, separados por coma. Si no
-  está definida, alcanza con el acceso del portal.
-- `PRODUCTOS_TOPE`: máximo de registros por corrida (default 300). Protege de un
-  pegado accidental.
-- `PRODUCTOS_DATA_DIR`: dónde vive el historial de corridas. En Railway,
-  `/data/productos` con volumen persistente. Sin volumen no se puede revertir
-  una corrida después de un reinicio.
-
-Un solo worker ASGI: `aplicar` toma un mutex en SQLite para que dos corridas en
-paralelo no creen el mismo producto dos veces.
-
-## Entradas
-
-Cuatro caminos, todos hacia la misma previsualización:
-
-1. **Archivo** `.xlsx` con las hojas Productos, Proveedores y Precios —la
-   plantilla vigente se lee sin cambios— o un `.csv` de una sola hoja. Va como
-   cuerpo crudo, igual que los PDF del agente administrativo, así el tope de
-   tamaño se aplica mientras se recibe.
-2. **Pegado desde Excel**: se copian las celdas y se pegan. Sin archivo.
-3. **Modificación masiva sin archivo**: se filtra por categoría, proveedor o
-   texto, se elige un campo y una operación —fijar, multiplicar, sumar, buscar
-   y reemplazar— y el resultado se convierte en las mismas filas que saldrían
-   de un Excel. No tiene camino de escritura propio: hay uno solo que auditar.
-   Los productos que no cambian ni aparecen.
-4. **Plantilla descargable**, generada desde el esquema, con una hoja «Valores
-   válidos» que trae lo que Odoo acepta hoy en cada desplegable. Es lo que
-   hacía `descubrir_catalogo.py`, ya integrado.
-
-## Pendiente
-
-- La cola con el agente administrativo tiene el endpoint y la función
-  `encolar()`, pero el agente administrativo todavía no la llama.
+PRODUCTOS_DATA_DIR: por defecto /data/productos cuando hay volumen. PRODUCTOS_TOPE: 300. Se requiere un único worker ASGI y almacenamiento persistente para conservar corridas, operaciones y fotos anteriores. Los trabajos interrumpidos por un reinicio quedan rechazados o inciertos, nunca se reproducen a ciegas.
 
 ## Pruebas
 
-    python -m pytest tests/test_productos.py           # motor: 34 pruebas
-    python -m pytest tests/test_productos_planilla.py  # planilla y masiva: 18
-    python tests/e2e_productos.py                      # navegador -> API -> motor
+Suite unittest en tests/test_*.py. Incluye cortes de RPC, idempotencia, conflictos, imágenes, campos inválidos y continuación de comprobantes.
 
-Las dos primeras corren contra un Odoo en memoria (`tests/odoo_falso.py`) que
-anota cada escritura: se puede afirmar no solo que el resultado es correcto,
-sino que no se tocó nada de más. La tercera necesita Playwright.
+Para navegador: iniciar tests/serve_productos_test.py en 127.0.0.1:8767 y ejecutar tests/productos_browser.cjs con Playwright. Ese servidor usa exclusivamente Odoo simulado y no importa credenciales de producción.

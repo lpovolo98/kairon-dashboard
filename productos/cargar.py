@@ -12,6 +12,7 @@ quien toque el código después.
 """
 
 import re
+import math
 import unicodedata
 
 from .esquema import (COLUMNAS_PRODUCTOS, FIJOS_AL_CREAR, HOJAS, columna_clave)
@@ -35,13 +36,15 @@ class SoloLectura:
         self._odoo = odoo
 
     def call(self, modelo, metodo, args, kwargs=None):
-        if metodo in ESCRITURAS:
+        if metodo not in {'search', 'read', 'search_read', 'search_count', 'fields_get'}:
             raise AssertionError(
                 f"Se intentó {modelo}.{metodo} durante una previsualización. "
                 f"La previsualización nunca escribe.")
         return self._odoo.call(modelo, metodo, args, kwargs)
 
     def __getattr__(self, nombre):
+        if nombre not in ('campos','solo_existentes'):
+            raise AttributeError('Operación no disponible en solo lectura: '+nombre)
         return getattr(self._odoo, nombre)
 
 
@@ -101,7 +104,7 @@ def mismo_valor(a, b, tipo):
             return False
         return abs(na - nb) < 1e-6
     if tipo == "booleano":
-        return bool(a) == bool(b)
+        return a_booleano(a) == a_booleano(b)
     if tipo == "m2m":
         return sorted(a or []) == sorted(b or [])
     if tipo == "m2o":
@@ -154,7 +157,7 @@ class Resolvedor:
         campo = etiqueta or modelo
 
         if id_forzado is not None:
-            existe = self.odoo.call(modelo, "search", [[["id", "=", id_forzado]]])
+            existe = self.odoo.call(modelo, "search", [[["id", "=", id_forzado]] + (dominio_extra or [])])
             if not existe:
                 errores.append(f"El id {id_forzado} indicado para «{nombre}» en {campo} no existe en Odoo.")
                 self.cache[clave] = None
@@ -193,7 +196,7 @@ class Resolvedor:
         if not texto:
             return []
         ids = []
-        for nombre in [n.strip() for n in str(texto).split(",") if n.strip()]:
+        for nombre in [n.strip() for n in re.split(r';|,(?!\d)',str(texto)) if n.strip()]:
             i = self.buscar("account.tax", nombre, errores,
                             dominio_extra=[["type_tax_use", "=", alcance]], etiqueta=etiqueta)
             if i:
@@ -210,10 +213,13 @@ def buscar_producto_por_sku(odoo, sku, errores=None):
     "a la vista".
     """
     sku_norm = str(sku).strip().lower()
-    candidatos = odoo.call("product.template", "search", [[["default_code", "ilike", sku]]])
-    if not candidatos:
-        return None
-    regs = odoo.call("product.template", "read", [candidatos], {"fields": ["default_code"]})
+    cache=getattr(odoo,'_sku_cache',None)
+    if cache is not None:
+        regs=cache.get(sku_norm,[])
+    else:
+        candidatos = odoo.call("product.template", "search", [[["default_code", "ilike", sku]]], {'context': {'active_test': False}})
+        if not candidatos:return None
+        regs = odoo.call("product.template", "read", [candidatos], {"fields": ["default_code", "active"], 'context': {'active_test': False}})
     coincidencias = [r["id"] for r in regs if (r.get("default_code") or "").strip().lower() == sku_norm]
     if len(coincidencias) > 1:
         if errores is not None:
@@ -221,6 +227,8 @@ def buscar_producto_por_sku(odoo, sku, errores=None):
                 f"Hay {len(coincidencias)} productos en Odoo cuya Referencia interna coincide con "
                 f"«{sku}» salvo espacios. Corregí el código directamente en Odoo antes de continuar.")
         return None
+    if coincidencias and errores is not None and any(r['id'] in coincidencias and r.get('active') is False for r in regs):
+        errores.append('El SKU está archivado en Odoo. Reactivalo antes de modificarlo; no se creará un duplicado.')
     return coincidencias[0] if coincidencias else None
 
 
@@ -229,6 +237,9 @@ def buscar_producto_por_sku(odoo, sku, errores=None):
 def _leer_existente(odoo, modelo, id_, columnas):
     campos = [c["campo"] for c in columnas if not c["campo"].startswith("_")]
     campos = odoo.solo_existentes(modelo, campos) if hasattr(odoo, "solo_existentes") else campos
+    cache=getattr(odoo,'_product_cache',{})
+    if modelo=='product.template' and id_ in cache:
+        return dict({k:cache[id_].get(k,False) for k in campos},id=id_)
     regs = odoo.call(modelo, "read", [[id_]], {"fields": campos})
     return regs[0] if regs else {}
 
@@ -264,6 +275,8 @@ def _valor_actual(reg, spec, odoo, cache):
 def _valor_deseado(spec, crudo, res, errores):
     """Devuelve (valor_para_odoo, texto_para_mostrar)."""
     tipo = spec["tipo"]
+    if crudo == '[VACIAR]' and tipo in ('texto','m2m') and not spec.get('requerido'):
+        return ([] if tipo=='m2m' else ''), '[VACIAR]'
     if tipo == "m2o":
         id_ = res.buscar(spec["modelo"], crudo, errores, etiqueta=spec.get("etiqueta"))
         nombre, _ = extraer_id_opcional(crudo)
@@ -273,8 +286,13 @@ def _valor_deseado(spec, crudo, res, errores):
         return ids, ", ".join(n.strip() for n in str(crudo or "").split(",") if n.strip())
     if tipo == "numero":
         n = a_numero(crudo)
+        if n is None or not math.isfinite(n) or n < 0 or (spec['campo'] == 'x_studio_unidades_por_caja' and n <= 0):
+            errores.append(f"«{spec['col']}» requiere un número válido {'mayor que cero' if spec['campo'] == 'x_studio_unidades_por_caja' else 'no negativo'}.")
+            return None,str(crudo)
         return n, formatear(n, "numero")
     if tipo == "booleano":
+        if not isinstance(crudo, bool) and sin_acentos(crudo).strip() not in ('si','s','true','1','x','verdadero','no','n','false','0','falso'):
+            errores.append(f"«{spec['col']}» debe ser Sí o No.")
         b = a_booleano(crudo)
         return b, formatear(b, "booleano")
     return (str(crudo).strip() if crudo not in (None, "") else ""), formatear(crudo, "texto")
@@ -293,15 +311,19 @@ def previsualizar_hoja(odoo, hoja, filas, res=None, skus_validos=None, skus_futu
 
     for i, cruda in enumerate(filas, start=2):
         errores = []
+        desconocidas=set(cruda)-{c['col'] for c in columnas}
+        if desconocidas: errores.append('Columnas no reconocidas: '+', '.join(sorted(desconocidas)))
         sku = str(cruda.get(clave) or "").strip()
         if not sku:
+            salida.append({'sku':'', 'estado':'error','errores':[f'Fila {i}: falta SKU.'], 'campos':{}})
             continue
 
-        if sku in vistos:
-            errores.append(f"El SKU «{sku}» aparece más de una vez en el archivo (filas {vistos[sku]} y {i}).")
-        vistos.setdefault(sku, i)
+        identidad = (sku.casefold(), str(cruda.get('Proveedor' if hoja == 'proveedores' else 'Lista de precios','')).strip().casefold()) if hoja != 'productos' else sku.casefold()
+        if identidad in vistos:
+            errores.append(f"El SKU «{sku}» y su destino aparecen más de una vez (filas {vistos[identidad]} y {i}).")
+        vistos.setdefault(identidad, i)
 
-        if skus_validos is not None and sku not in skus_validos:
+        if skus_validos is not None and sku.casefold() not in {s.casefold() for s in skus_validos}:
             errores.append(f"El SKU «{sku}» no está en la hoja Productos.")
 
         tmpl_id = buscar_producto_por_sku(odoo, sku, errores)
@@ -325,11 +347,14 @@ def previsualizar_hoja(odoo, hoja, filas, res=None, skus_validos=None, skus_futu
                 errores.append(f"Falta «{spec['col']}». {spec['aviso_si_falta']}")
             if not presente:
                 continue
+            if crudo in (None,'') and not spec.get('requerido'):
+                continue
 
             valor, texto = _valor_deseado(spec, crudo, res, errores)
             dato = {"nuevo": texto}
             if spec.get("opciones"):
                 dato["opciones"] = spec["opciones"]
+                dato['seleccion']=valor
 
             if destino_id:
                 val_actual, txt_actual = _valor_actual(actual, spec, odoo, cache_nombres)
@@ -353,7 +378,7 @@ def previsualizar_hoja(odoo, hoja, filas, res=None, skus_validos=None, skus_futu
 
         salida.append({"sku": sku, "estado": estado, "errores": errores, "campos": campos,
                        "_id": destino_id, "_tmpl": tmpl_id, "_escribir": escribir,
-                       "_existente": existente})
+                       "_existente": existente, '_actual':actual})
     return salida
 
 
@@ -371,7 +396,7 @@ def _resolver_destino(odoo, hoja, tmpl_id, sku, cruda, res, errores, skus_futuro
         # Si el producto se da de alta en esta misma corrida todavía no existe
         # en Odoo, pero va a existir cuando le toque el turno a esta hoja: los
         # productos se escriben primero.
-        if sku not in skus_futuros:
+        if sku.casefold() not in {s.casefold() for s in skus_futuros}:
             errores.append("El producto todavía no existe en Odoo. Cargalo primero en la hoja Productos.")
         return None, False
 
@@ -381,6 +406,8 @@ def _resolver_destino(odoo, hoja, tmpl_id, sku, cruda, res, errores, skus_futuro
             return None, False
         ids = odoo.call("product.supplierinfo", "search",
                         [[["product_tmpl_id", "=", tmpl_id], ["partner_id", "=", partner_id]]])
+        if len(ids) > 1:
+            errores.append('Hay varias condiciones de este proveedor para el producto. Revisá la escala o vigencia en Odoo.')
         return (ids[0] if ids else None), bool(ids)
 
     lista_id = res.buscar("product.pricelist", cruda.get("Lista de precios"), errores,
@@ -390,12 +417,27 @@ def _resolver_destino(odoo, hoja, tmpl_id, sku, cruda, res, errores, skus_futuro
     ids = odoo.call("product.pricelist.item", "search",
                     [[["pricelist_id", "=", lista_id], ["product_tmpl_id", "=", tmpl_id],
                       ["applied_on", "=", "1_product"]]])
+    if len(ids) > 1:
+        errores.append('Hay varias reglas de esta lista para el producto. Revisá su cantidad mínima o vigencia en Odoo.')
     return (ids[0] if ids else None), bool(ids)
 
 
 def previsualizar(odoo, hojas):
     """hojas: {'productos': [...], 'proveedores': [...], 'precios': [...]}"""
     lector = SoloLectura(odoo)
+    skus=sorted({str(row.get(columna_clave(h)) or '').strip().lower() for h,rows in hojas.items() if h in HOJAS for row in rows} - {''})
+    if len(skus)>20:
+        fields=list(dict.fromkeys(['active']+[c['campo'] for c in COLUMNAS_PRODUCTOS]))
+        if hasattr(lector,'solo_existentes'):fields=lector.solo_existentes('product.template',fields)
+        lector._sku_cache={};lector._product_cache={}
+        for start in range(0,len(skus),100):
+            batch=skus[start:start+100]
+            domain=['|']*(len(batch)-1)+[['default_code','ilike',sku] for sku in batch]
+            rows=lector.call('product.template','search_read',[domain],{'fields':fields,'limit':0,'context':{'active_test':False}})
+            for row in rows:
+                key=(row.get('default_code') or '').strip().lower()
+                if row['id'] in lector._product_cache:continue
+                lector._sku_cache.setdefault(key,[]).append(row);lector._product_cache[row['id']]=row
     res = Resolvedor(lector)
     productos = previsualizar_hoja(lector, "productos", hojas.get("productos") or [], res)
     skus = {f["sku"] for f in productos}
@@ -411,11 +453,11 @@ def previsualizar(odoo, hojas):
 
 # ─── Escritura ───────────────────────────────────────────────
 
-def aplicar(odoo, hojas, tope=None):
+def aplicar(odoo, hojas, tope=None, *, plan=None):
     """Vuelve a previsualizar del lado del servidor —nunca confía en el plan
     que manda el navegador— y recién ahí escribe. Devuelve el resultado y lo
     necesario para revertir la corrida."""
-    plan = previsualizar(odoo, hojas)
+    plan = plan if plan is not None else previsualizar(odoo, hojas)
 
     con_error = [f for h in plan.values() for f in h if f["estado"] == "error"]
     if con_error:
@@ -438,6 +480,8 @@ def aplicar(odoo, hojas, tope=None):
 
             if fila["estado"] == "modificacion":
                 previos = _leer_existente(odoo, modelo, fila["_id"], HOJAS[hoja]["columnas"])
+                if previos!=fila['_actual']:
+                    raise Frenar('El registro cambió durante la carga. El avance anterior quedó registrado; volvé a revisar los datos.')
                 odoo.call(modelo, "write", [[fila["_id"]], valores])
                 deshacer["modificados"].append({
                     "modelo": modelo, "id": fila["_id"],
@@ -492,6 +536,8 @@ def revertir(odoo, deshacer):
 # ─── Modificación masiva sin archivo ─────────────────────────
 
 OPERACIONES = {
+    'aumentar_pct':lambda actual,v: None if a_numero(actual) is None or a_numero(v) is None else a_numero(actual)*(1+a_numero(v)/100),
+    'redondear':lambda actual,v: None if a_numero(actual) is None or not a_numero(v) or a_numero(v)<0 else round(a_numero(actual)/a_numero(v))*a_numero(v),
     "fijar":      lambda actual, v: v,
     "multiplicar": lambda actual, v: None if a_numero(actual) is None or a_numero(v) is None
                                      else a_numero(actual) * a_numero(v),
@@ -534,7 +580,9 @@ def buscar_para_editar(odoo, categoria=None, proveedor=None, texto=None, limite=
 
     campos = [c["campo"] for c in COLUMNAS_PRODUCTOS if not c.get("clave")]
     filas = lector.call("product.template", "search_read", [dominio],
-                        {"fields": ["default_code"] + campos, "limit": limite, "order": "default_code"})
+                        {"fields": ["default_code"] + campos, "limit": limite+1, "order": "default_code"})
+    if len(filas)>limite:
+        raise Frenar(f'El filtro encuentra más de {limite} productos. Acotalo por categoría, proveedor o texto; no se omitió ningún producto silenciosamente.')
 
     cache, salida = {}, []
     for f in filas:
@@ -557,7 +605,7 @@ def aplicar_operacion(productos, columna, operacion, valor):
     spec = next((c for c in COLUMNAS_PRODUCTOS if c["col"] == columna), None)
     if not spec:
         raise Frenar(f"No existe la columna «{columna}».")
-    if operacion in ("multiplicar", "sumar") and spec["tipo"] != "numero":
+    if operacion in ("multiplicar", "sumar",'aumentar_pct','redondear') and spec["tipo"] != "numero":
         raise Frenar(f"«{columna}» no es numérica: solo se puede fijar o reemplazar texto.")
 
     filas = []
@@ -567,6 +615,8 @@ def aplicar_operacion(productos, columna, operacion, valor):
         if nuevo is None or mismo_valor(nuevo, actual, spec["tipo"]):
             continue
         if spec["tipo"] == "numero":
-            nuevo = round(float(nuevo), 4)
+            number=a_numero(nuevo)
+            if number is None or not math.isfinite(number) or number<0:raise Frenar('El valor debe ser un número no negativo válido.')
+            nuevo = round(number, 4)
         filas.append({"Referencia interna (SKU)": p["sku"], columna: nuevo})
     return filas

@@ -2,7 +2,7 @@
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agente de productos — Kairon</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/productos.css"></head>
+<link rel="stylesheet" href="/static/productos.css?v=20260908-3"></head>
 <body>
 
 <aside>
@@ -25,6 +25,7 @@
 </aside>
 
 <main>
+  <nav class="mobile-nav" aria-label="Aplicaciones"><a href="/">Portal</a><a href="/administracion">Administración</a><a href="/productos">Productos</a></nav>
   <header class="bienvenida">
     <p class="eyebrow">CATÁLOGO / ABM DE PRODUCTOS</p>
     <h1>Agente de productos</h1>
@@ -32,7 +33,17 @@
   </header>
 
   <div class="status" id="conexion" role="status">Comprobando disponibilidad…</div>
+  <nav class="tareas" aria-label="Elegir tarea">
+    <button class="fantasma" data-tarea="crear">Crear productos</button>
+    <button class="fantasma" data-tarea="modificar">Modificar catálogo</button>
+    <button class="fantasma" data-tarea="imagenes">Gestionar fotos</button>
+    <button class="fantasma" data-tarea="pendientes">Resolver pendientes</button>
+    <a class="fantasma" href="#historial">Ver historial ↓</a>
+  </nav>
+  <p class="pasos">1 · Seleccionar &nbsp; → &nbsp; 2 · Revisar &nbsp; → &nbsp; 3 · Confirmar &nbsp; → &nbsp; 4 · Seguir el resultado</p>
 
+  <p id="mensaje-productos" role="status" aria-live="polite"></p>
+  <button id="btn-recuperar" class="fantasma">Recuperar borrador guardado</button>
   <div class="tabs" role="tablist">
     <button class="tab activa" data-tab="productos" role="tab">Productos <span class="n" id="n-productos">0</span></button>
     <button class="tab" data-tab="proveedores" role="tab">Proveedores <span class="n" id="n-proveedores">0</span></button>
@@ -74,9 +85,9 @@
             <li>Resuelve categorías, unidades, impuestos y proveedores contra Odoo. Si un nombre no existe, te ofrece los válidos en un desplegable.</li>
             <li>Compara cada fila con el producto real: separa <b>altas</b> de <b>modificaciones</b>, y no toca las que no cambian.</li>
             <li>Busca el SKU tolerando espacios y mayúsculas, para no crear duplicados de códigos que ya existen.</li>
-            <li>Toda corrida queda registrada y se puede revertir.</li>
+            <li>Cada escritura queda registrada. La reversión comprueba posibles conflictos.</li>
           </ul>
-          <div class="aviso">Los valores fijos de Kairon —<b>producto almacenable</b>, <b>facturar por cantidad ordenada</b>, <b>se puede vender y comprar</b>— vienen aplicados por defecto y se pueden cambiar por fila.</div>
+          <div class="aviso">Los valores fijos de Kairon —<b>producto almacenable</b>, <b>facturar por cantidad ordenada</b>, <b>se puede vender y comprar</b>— vienen aplicados por defecto y se aplican a las altas.</div>
         </div>
       </div>
 
@@ -107,8 +118,9 @@
     <div id="productos-preview" hidden>
       <div class="resumen" id="resumen-productos"></div>
       <div class="filtros">
+        <label><input id="solo-cambios" type="checkbox"> Solo campos modificados</label>
         <input type="search" id="buscar-productos" placeholder="Buscar por SKU o nombre…">
-        <button class="fantasma chico" id="btn-otro-archivo">Cargar otro archivo</button>
+        <button class="fantasma chico" id="btn-exportar">Exportar revisión</button><button class="fantasma chico" id="btn-otro-archivo">Cargar otro archivo</button>
       </div>
       <div class="tabla-wrap"><table id="tabla-productos"><thead></thead><tbody></tbody></table></div>
     </div>
@@ -120,7 +132,7 @@
       <div class="section-head">
         <div><h2>Vínculos con proveedores</h2>
         <p>El código con el que cada proveedor identifica el producto. Sin esto, el agente administrativo no puede mapear las líneas de su factura.</p></div>
-        <span class="badge">product.supplierinfo</span>
+        <span class="badge">VÍNCULOS</span>
       </div>
       <div id="proveedores-cuerpo"><p class="vacio">Cargá la plantilla en la pestaña Productos: la hoja «Proveedores» se lee junto con el resto.</p></div>
     </div>
@@ -132,7 +144,7 @@
       <div class="section-head">
         <div><h2>Reglas de lista de precios</h2>
         <p>Precio fijo por producto en una lista. Si la regla ya existe se actualiza; si no, se crea.</p></div>
-        <span class="badge">product.pricelist.item</span>
+        <span class="badge">PRECIOS</span>
       </div>
       <div id="precios-cuerpo"><p class="vacio">Cargá la plantilla en la pestaña Productos: la hoja «Precios» se lee junto con el resto.</p></div>
     </div>
@@ -146,12 +158,12 @@
           <div class="section-head">
             <div><h2>Fotos de producto</h2>
             <p>Soltá todas las fotos juntas, con el nombre que tengan. Se achican en tu computadora antes de subir y el agente propone a qué producto va cada una.</p></div>
-            <span class="badge">→ image_1920</span>
+            <span class="badge">FOTOS</span>
           </div>
           <label class="drop" id="drop-imagenes" for="file-imagenes">
             <span class="file-icon" aria-hidden="true">▣</span>
             <strong id="nombre-imagenes">Arrastrá las fotos acá</strong>
-            <span>podés soltar la carpeta entera</span>
+            <span>podés seleccionar varias fotos</span>
             <small>JPG · PNG · WEBP — se redimensionan a 1600 px antes de salir de tu equipo</small>
             <input type="file" id="file-imagenes" accept="image/*" multiple>
           </label>
@@ -181,7 +193,7 @@
           <div class="img-grid" id="grid-imagenes"></div>
         </div>
         <div class="card">
-          <div class="section-head"><div><h2>Sin foto en Odoo</h2><p id="sub-sin-foto"></p></div></div>
+          <div class="section-head"><div><h2>Productos de Odoo</h2><p id="sub-sin-foto"></p></div></div>
           <div class="sin-foto" id="lista-sin-foto"></div>
         </div>
       </div>
@@ -196,10 +208,11 @@
         <p>Productos que aparecieron en una factura de proveedor y todavía no existen en Odoo. Completalos y dales de alta para que la factura pueda seguir.</p></div>
         <span class="badge">COLA COMPARTIDA</span>
       </div>
+      <button id="btn-revisar-pendientes" class="fantasma">Comprobar equivalencias y retomar</button>
       <div id="pendientes-cuerpo"></div>
     </div>
   </section>
-</main>
+<section class="card" id="historial"><div class="section-head"><div><h2>Historial de cargas</h2><p>Avance, resultados y revisión de cambios.</p></div><button id="btn-historial" class="fantasma">Actualizar</button></div><div id="historial-cuerpo"></div></section></main>
 
 <div class="accionbar" id="accionbar">
   <p id="accionbar-texto"></p>
@@ -209,5 +222,5 @@
   </div>
 </div>
 
-<script src="/static/productos.js"></script>
+<script src="/static/productos.js?v=20260908-3"></script>
 </body></html>

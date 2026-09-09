@@ -118,10 +118,13 @@ def history(owner=Depends(authorize)):
     return result
 
 
-def work(job_id, pdf):
+def work(job_id, pdf, document=None):
     try:
+        # Keep the exact document for a controlled continuation after product mapping.
+        if len(job_id)==64 and all(c in '0123456789abcdef' for c in job_id):
+            (directory()/(job_id+'.pdf')).write_bytes(pdf)
         save(job_id, state='leyendo', message='Leyendo factura')
-        doc = service.extract(pdf)
+        doc = document if document is not None else service.extract(pdf)
         save(job_id, state='validando', message='Controlando datos en Odoo', document=doc)
         # SQLite lock spans the Odoo workflow, serializing writes across workers sharing a volume.
         with closing(sqlite3.connect(directory() / 'writer.sqlite', timeout=600)) as guard, guard:
@@ -131,6 +134,16 @@ def work(job_id, pdf):
     except Exception as exc:
         with connect() as db:
             data = json.loads(db.execute('SELECT data FROM jobs WHERE id=?', (job_id,)).fetchone()[0])
+            owner=db.execute('SELECT owner FROM jobs WHERE id=?',(job_id,)).fetchone()[0]
+        if isinstance(exc,service.ProductosPendientes) and not data.get('purchase_id') and not data.get('move_id'):
+            from productos.api import encolar
+            for line in exc.lineas:
+                encolar({'proveedor':data['document']['proveedor']['nombre'],
+                    'proveedor_id':exc.proveedor['id'],'codigo_proveedor':line['codigo_proveedor'],
+                    'descripcion':line['descripcion'],'precio':line['precio_unitario'],
+                    'factura':data['document']['comprobante']['numero'],'job_id':job_id,'owner':owner})
+            save(job_id,state='esperando_productos',message=str(exc))
+            return
         mutation = data['state'] not in ('recibido', 'leyendo', 'validando') or bool(data.get('supplier_id'))
         if isinstance(exc, (ValueError, service.loader.Frenar)) and not mutation:
             message = str(exc)[:2000]
@@ -199,6 +212,21 @@ def recover():
     with connect() as db:
         for job_id, encoded in db.execute('SELECT id,data FROM jobs').fetchall():
             data = json.loads(encoded)
-            if data['state'] not in ('completado', 'borrador', 'existente', 'revision', 'resultado_incierto'):
+            if data['state'] not in ('completado', 'borrador', 'existente', 'revision', 'resultado_incierto','esperando_productos'):
                 data.update(state='resultado_incierto', message='El servidor se reinició. Revisá Odoo antes de repetir la carga.')
                 db.execute('UPDATE jobs SET data=? WHERE id=?', (json.dumps(data), job_id))
+
+def continuar_productos(job_id):
+    if len(job_id)!=64 or any(c not in '0123456789abcdef' for c in job_id):return
+    path=directory()/(job_id+'.pdf')
+    if not path.is_file():return
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute('SELECT data FROM jobs WHERE id=?',(job_id,)).fetchone()
+        if not row:return
+        data=json.loads(row[0])
+        if data.get('state')!='esperando_productos' or data.get('purchase_id') or data.get('move_id'):return
+        data.update(state='recibido',message='Equivalencias resueltas. Revalidando el comprobante.')
+        db.execute('UPDATE jobs SET data=? WHERE id=?',(json.dumps(data),job_id))
+    try:executor.submit(work,job_id,path.read_bytes(),data.get('document'))
+    except Exception:save(job_id,state='esperando_productos',message='No se pudo retomar. Reintentá desde Productos.')

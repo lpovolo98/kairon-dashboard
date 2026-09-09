@@ -1172,6 +1172,7 @@ def status():
             "aud_desde_env": bool(os.getenv("CF_ACCESS_AUD") is not None),
             "commit": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:7],
         },
+        "productos": {"version": "2026-09-08.1", "trabajos_persistentes": True},
         "administracion": {
             "version": "2026-09-08.2",
             "modo": "compra-confirmada-factura-borrador",

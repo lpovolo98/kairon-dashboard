@@ -14,6 +14,7 @@ M2O = {
 M2M = {"product.template": ["taxes_id", "supplier_taxes_id"]}
 
 CAMPOS = {
+    'purchase.order.line':['product_id'], 'sale.order.line':['product_id'], 'stock.move':['product_id'], 'account.move.line':['product_id'],
     "product.template": ["name", "default_code", "categ_id", "uom_id", "x_studio_unidades_por_caja",
                          "taxes_id", "supplier_taxes_id", "list_price", "standard_price", "weight",
                          "available_in_pos", "image_1920", "active", "type", "is_storable",
@@ -40,6 +41,8 @@ class OdooFalso:
 
     # ── siembra ──
     def sembrar(self, modelo, valores):
+        valores=dict(valores)
+        valores.setdefault('active',True)
         id_ = valores.pop("id", None) or self._nuevo_id()
         self.datos[modelo][id_] = dict(valores)
         return id_
@@ -66,8 +69,19 @@ class OdooFalso:
 
     # ── operaciones ──
     def _search(self, modelo, args, kwargs):
-        ids = self._filtrar(modelo, args[0] if args else [])
+        domain=list(args[0] if args else [])
+        if kwargs.get('context',{}).get('active_test') is False:
+            domain.append(['active','in',[True,False]])
+        ids = self._filtrar(modelo, domain)
+        ids=ids[kwargs.get('offset',0):]
         return ids[: kwargs["limit"]] if kwargs.get("limit") else ids
+
+    def _unlink(self,modelo,args,kwargs):
+        for id_ in args[0]: del self.datos[modelo][id_]
+        return True
+
+    def _search_count(self,modelo,args,kwargs):
+        return len(self._search(modelo,args,{}))
 
     def _read(self, modelo, args, kwargs):
         ids = args[0] if isinstance(args[0], list) else [args[0]]
@@ -133,11 +147,18 @@ class OdooFalso:
         menciona_active = any(isinstance(c, (list, tuple)) and c[0] == "active" for c in dominio)
         ids = [i for i, r in self.datos[modelo].items()
                if menciona_active or r.get("active", True)]
-        for cond in dominio:
-            if not isinstance(cond, (list, tuple)) or len(cond) != 3:
-                continue
-            campo, op, valor = cond
-            ids = [i for i in ids if self._cumple(modelo, i, campo, op, valor)]
+        def matches(id_):
+            cursor=iter(dominio)
+            def evaluate(token):
+                if token in ('|','&'):
+                    left=evaluate(next(cursor));right=evaluate(next(cursor))
+                    return left or right if token=='|' else left and right
+                if token=='!':return not evaluate(next(cursor))
+                return self._cumple(modelo,id_,*token)
+            checks=[]
+            for token in cursor:checks.append(evaluate(token))
+            return all(checks)
+        ids=[id_ for id_ in ids if matches(id_)]
         return sorted(ids)
 
     def _cumple(self, modelo, id_, campo, op, valor):

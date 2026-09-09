@@ -61,8 +61,7 @@ class LecturaDeLaPlantilla(unittest.TestCase):
             [None, "Sin SKU", "Panificados", "Unidades", 1, 1, 1],  # resto de formato
             ["400002", "Pan 2", "Panificados", "Unidades", 12, 1, 1],
         ]})
-        r = planilla.leer("p.xlsx", datos)
-        self.assertEqual([f["Referencia interna (SKU)"] for f in r["productos"]], ["400001", "400002"])
+        with self.assertRaisesRegex(ValueError,'sin SKU'): planilla.leer("p.xlsx", datos)
 
     def test_nombres_de_hoja_sin_acentos_ni_mayusculas(self):
         datos = libro({"PRODUCTOS": [COLS_P, ["400001", "Pan", "Panificados", "Unidades", 1, 1, 1]]})
@@ -199,7 +198,7 @@ class Persistencia(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PRODUCTOS_DATA_DIR", None)
             with patch.object(Path, "is_dir", return_value=True):
-                self.assertEqual(str(api.ruta_datos()), "/data/productos")
+                self.assertEqual(api.ruta_datos().as_posix(), "/data/productos")
 
     def test_sin_volumen_cae_al_repo_y_lo_reporta_como_no_persistente(self):
         import os
@@ -314,7 +313,7 @@ class ErroresDeOdoo(unittest.TestCase):
 
         class Devuelve:
             def call(self, modelo, metodo, args, kwargs=None):
-                assert "order" not in (kwargs or {}), "no se le debe pedir el orden a Odoo"
+                assert (kwargs or {}).get('order') != 'display_name', 'No ordenar por un campo calculado'
                 return [{"id": 2, "display_name": "Zeta"}, {"id": 1, "display_name": "alfa"}]
         c = _catalogo(Devuelve())
         self.assertEqual([x["name"] for x in c["categorias"]], ["alfa", "Zeta"])

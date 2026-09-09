@@ -10,6 +10,8 @@ Lo que se busca demostrar, en orden de importancia:
 """
 
 import base64
+import io
+from PIL import Image
 import os
 import sys
 import unittest
@@ -20,7 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from productos import cargar, imagenes            # noqa: E402
 from tests.odoo_falso import OdooFalso            # noqa: E402
 
-PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64).decode()
+_image=io.BytesIO();Image.new('RGB',(10,10),'white').save(_image,format='PNG')
+PNG = base64.b64encode(_image.getvalue()).decode()
 
 
 def base():
@@ -331,7 +334,7 @@ class Revertir(unittest.TestCase):
     def test_revertir_restaura_los_impuestos(self):
         o, d = base()
         r = cargar.aplicar(o, {"productos": [
-            fila("400001", **{"Impuestos de venta": ""})]})
+            fila("400001", **{"Impuestos de venta": "[VACIAR]"})]})
         self.assertEqual(o.datos["product.template"][d["p1"]]["taxes_id"], [])
         cargar.revertir(o, r["deshacer"])
         self.assertEqual(o.datos["product.template"][d["p1"]]["taxes_id"], [d["iva_v"]])
@@ -345,7 +348,7 @@ class Imagenes(unittest.TestCase):
         r = imagenes.aplicar(o, [{"sku": "400001", "imagen": "data:image/png;base64," + PNG}])
         self.assertEqual(r["errores"], [])
         self.assertTrue(r["subidas"][0]["pisaba_una_foto"])
-        self.assertEqual(o.datos["product.template"][d["p1"]]["image_1920"], PNG)
+        self.assertTrue(base64.b64decode(o.datos["product.template"][d["p1"]]["image_1920"]).startswith(b'\xff\xd8'))
 
         cargar.revertir(o, r["deshacer"])
         self.assertEqual(o.datos["product.template"][d["p1"]]["image_1920"], "FOTOVIEJA")
@@ -354,29 +357,25 @@ class Imagenes(unittest.TestCase):
         o, d = base()
         r = imagenes.aplicar(o, [{"sku": " 400013 ", "imagen": PNG}])
         self.assertEqual(r["errores"], [])
-        self.assertEqual(o.datos["product.template"][d["p3"]]["image_1920"], PNG)
+        self.assertTrue(base64.b64decode(o.datos["product.template"][d["p3"]]["image_1920"]).startswith(b'\xff\xd8'))
 
     def test_rechaza_lo_que_no_es_una_imagen(self):
         o, d = base()
         pdf = base64.b64encode(b"%PDF-1.7 no soy una imagen").decode()
-        r = imagenes.aplicar(o, [{"sku": "400001", "imagen": pdf}])
-        self.assertEqual(r["subidas"], [])
-        self.assertIn("no es una imagen", r["errores"][0])
+        with self.assertRaises(cargar.Frenar): imagenes.aplicar(o, [{"sku": "400001", "imagen": pdf}])
         self.assertEqual(o.escrituras, [])
 
     def test_rechaza_una_imagen_por_encima_del_tope(self):
         o, d = base()
         gigante = base64.b64encode(b"\xff\xd8\xff" + b"\x00" * (imagenes.TOPE_BYTES + 10)).decode()
-        r = imagenes.aplicar(o, [{"sku": "400001", "imagen": gigante}])
-        self.assertIn("tope", r["errores"][0])
+        with self.assertRaises(cargar.Frenar): imagenes.aplicar(o, [{"sku": "400001", "imagen": gigante}])
         self.assertEqual(o.escrituras, [])
 
     def test_sku_sin_producto_no_frena_a_los_demas(self):
         o, d = base()
-        r = imagenes.aplicar(o, [{"sku": "999999", "imagen": PNG},
+        with self.assertRaises(cargar.Frenar): imagenes.aplicar(o, [{"sku": "999999", "imagen": PNG},
                                  {"sku": "400001", "imagen": PNG}])
-        self.assertEqual(len(r["subidas"]), 1)
-        self.assertEqual(len(r["errores"]), 1)
+        self.assertEqual(o.escrituras,[])
 
     def test_lista_de_productos_sin_foto(self):
         o, d = base()

@@ -15,6 +15,7 @@ const ESTADO = {
   pendientes: [],
   fotoSel: null,
   filtro: null,          // estado seleccionado en los chips
+  busy: false, revision: null, requestId: null, archivo: null, secuencia: 0,
 };
 
 const LADO_MAXIMO = 1600;   // mismos parametros que achicar_imagenes.py
@@ -32,14 +33,18 @@ const normalizar = s => String(s ?? '')
   .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 async function pedir(ruta, opciones) {
-  const r = await fetch(`${API}${ruta}`, opciones);
+  let r;
+  try { r = await fetch(`${API}${ruta}`, {...opciones, redirect:'manual', headers:{Accept:'application/json',...opciones?.headers}}); }
+  catch { throw new Error('No se pudo conectar. Revisá el historial antes de repetir una carga.'); }
+  if(r.type==='opaqueredirect'||r.status===401||r.status===403) throw new Error('Volvé a ingresar al portal. Tu borrador queda guardado en este equipo.');
+  if(!(r.headers.get('content-type')||'').includes('application/json')) throw new Error('El servicio devolvió una respuesta inesperada. Revisá el historial antes de repetir.');
   if (!r.ok) {
     // El servidor explica qué falta; un "respondió 503" pelado no sirve.
     let detalle = `${ruta} respondió ${r.status}`;
     try { const j = await r.json(); if (j.detail) detalle = j.detail; } catch (e) {}
     throw new Error(detalle);
   }
-  return r.json();
+  try { return await r.json(); } catch { throw new Error('La respuesta llegó incompleta. Actualizá el historial.'); }
 }
 
 // ── Arranque ──────────────────────────────────────────────
@@ -55,7 +60,7 @@ async function iniciar() {
         + `(<code>${esc(st.datos)}</code>): si el servidor se reinicia, lo aplicado no se va a poder revertir.`;
     } else if (st.ready) {
       box.className = 'status online';
-      box.textContent = 'Conectado a Odoo · las altas y modificaciones se previsualizan antes de escribir';
+      box.textContent = 'Odoo producción · revisá y confirmá los cambios antes de aplicar';
     } else {
       box.textContent = 'Falta configurar: ' + (st.missing || []).join(', ');
     }
@@ -106,23 +111,30 @@ function leerTSV(texto) {
 async function previsualizar(hojas) {
   // Se guardan las filas crudas: al aplicar se vuelven a mandar y el servidor
   // recalcula todo. El navegador nunca manda una escritura.
-  ESTADO.crudas = hojas;
-  ESTADO.filas = await pedir('/api/productos/previsualizar', {
+  ESTADO.crudas = hojas; ESTADO.revision=null; ESTADO.requestId=null;
+  const sequence=++ESTADO.secuencia; ESTADO.busy=true; actualizarBarra();
+  try { localStorage.setItem('kairon-productos-borrador',JSON.stringify(hojas)); } catch {}
+  try {
+  const result = await pedir('/api/productos/previsualizar', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(hojas),
   });
+  if(sequence!==ESTADO.secuencia)return;
+  ESTADO.filas=result; ESTADO.revision=result._revision;
   pintarTodo();
+  } catch(e) { aviso(e.message); }
+  finally {if(sequence===ESTADO.secuencia){ESTADO.busy=false;actualizarBarra();}}
 }
 
 /* Las ediciones en la tabla vuelven a la fila cruda y se re-previsualiza:
    el estado, el diff y los errores los recalcula siempre el servidor. */
 async function reprevisualizar() {
-  $$('#tabla-productos tbody tr').forEach(tr => {
-    const fila = ESTADO.crudas.productos[+tr.dataset.i];
+  $$('tr[data-hoja][data-i]').forEach(tr => {
+    const fila = ESTADO.crudas[tr.dataset.hoja][+tr.dataset.i];
     if (!fila) return;
     tr.querySelectorAll('[data-col]').forEach(td => {
       const control = td.querySelector('.celda-edit');
-      if (control) fila[td.dataset.col] = control.value;
+      if (control) fila[td.dataset.col] = control.multiple ? ([...control.selectedOptions].map(o=>o.value).join('; ') || '[VACIAR]') : control.value;
     });
   });
   await previsualizar(ESTADO.crudas);
@@ -177,21 +189,27 @@ function pintarPreview(hoja) {
 
   // Las columnas salen de los datos, no de una lista fija: si mañana la
   // plantilla trae un campo mas, aparece solo.
-  const columnas = [...new Set(filas.flatMap(campoDe))];
+  const columnas = [...new Set(filas.flatMap(campoDe))].filter(col=>!$('#solo-cambios').checked || filas.some(f=>['alta','error'].includes(f.estado)||f.campos[col]?.viejo!==undefined));
   const tabla = $('#tabla-productos');
   tabla.querySelector('thead').innerHTML = `<tr>
-    <th>Estado</th><th>SKU</th>${columnas.map(c => `<th data-col="${esc(c)}">${esc(c)}</th>`).join('')}</tr>`;
+    <th>Estado</th><th>SKU</th>${columnas.map(c => `<th data-col="${esc(c)}">${esc(c)}</th>`).join('')}<th>Selección</th></tr>`;
 
   tabla.querySelector('tbody').innerHTML = filas.map((f, i) => `
-    <tr data-i="${i}" class="${ESTADO.filtro && f.estado !== ESTADO.filtro ? 'oculta' : ''}">
+    <tr data-hoja="productos" data-i="${i}" class="${ESTADO.filtro && f.estado !== ESTADO.filtro ? 'oculta' : ''}">
       <td><span class="estado ${CLASE[f.estado]}">${ETIQUETA[f.estado]}</span>
           ${(f.errores || []).map(e => `<span class="err">${esc(e)}</span>`).join('')}</td>
       <td class="sku">${esc(f.sku)}</td>
       ${columnas.map(col => `<td data-col="${esc(col)}">${celda(f, col)}</td>`).join('')}
+      <td><button class="fantasma chico" data-excluir="${esc(f.sku)}">Quitar del lote</button></td>
     </tr>`).join('');
 
   $$('#tabla-productos .celda-edit').forEach(el =>
     el.addEventListener('change', reprevisualizar));
+  $$('[data-excluir]').forEach(button=>button.onclick=()=>{
+    const sku=button.dataset.excluir.trim().toLowerCase();
+    const hojas=Object.fromEntries(['productos','proveedores','precios'].map(h=>[h,(ESTADO.crudas[h]||[]).filter(row=>String(row[h==='productos'?'Referencia interna (SKU)':'SKU (igual al de Productos)']||'').trim().toLowerCase()!==sku)]));
+    if(Object.values(hojas).some(rows=>rows.length))previsualizar(hojas);else $('#btn-otro-archivo').click();
+  });
   filtrarTexto();
 }
 
@@ -208,9 +226,11 @@ function celda(fila, col) {
   const clase = d.viejo !== undefined && d.viejo !== d.nuevo ? 'nuevo' : '';
 
   if (opciones) {
-    return viejo + `<select class="celda-edit ${clase}">
-      ${opciones.map(o => `<option ${o.name === d.nuevo ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
-      ${opciones.some(o => o.name === d.nuevo) ? '' : `<option selected>${esc(d.nuevo)}</option>`}
+    const multi=String(d.opciones).startsWith('impuestos');
+    const ids=Array.isArray(d.seleccion)?d.seleccion:[d.seleccion];
+    return viejo + `<select ${multi?'multiple':''} class="celda-edit ${clase}" aria-label="${esc(col)}">
+      ${opciones.map(o => `<option value="${esc(o.name)} (id ${o.id})" ${ids.includes(o.id) ? 'selected' : ''}>${esc(o.name)} · ${o.id}</option>`).join('')}
+      ${!ids.some(Boolean)&&d.nuevo&&d.nuevo!=='[VACIAR]' ? `<option selected>${esc(d.nuevo)}</option>`:''}
     </select>`;
   }
   return viejo + `<input class="celda-edit ${clase}" value="${esc(d.nuevo)}">`;
@@ -219,7 +239,7 @@ function celda(fila, col) {
 function pintarSecundaria(hoja) {
   const filas = ESTADO.filas[hoja] || [];
   const cont = $('#' + hoja + '-cuerpo');
-  if (!filas.length) return;
+  if (!filas.length) {cont.innerHTML='<p class="vacio">No hay filas en esta hoja.</p>';return;}
   const c = contar(filas);
   const columnas = [...new Set(filas.flatMap(f => Object.keys(f.campos || {})))];
   cont.innerHTML = `
@@ -231,12 +251,13 @@ function pintarSecundaria(hoja) {
     </div>
     <div class="tabla-wrap"><table><thead><tr><th>Estado</th><th>SKU</th>
       ${columnas.map(x => `<th data-col="${esc(x)}">${esc(x)}</th>`).join('')}</tr></thead>
-      <tbody>${filas.map(f => `<tr>
+      <tbody>${filas.map((f,i) => `<tr data-hoja="${hoja}" data-i="${i}">
         <td><span class="estado ${CLASE[f.estado]}">${ETIQUETA[f.estado]}</span>
             ${(f.errores || []).map(e => `<span class="err">${esc(e)}</span>`).join('')}</td>
         <td class="sku">${esc(f.sku)}</td>
         ${columnas.map(col => `<td data-col="${esc(col)}">${celda(f, col)}</td>`).join('')}
       </tr>`).join('')}</tbody></table></div>`;
+  cont.querySelectorAll('.celda-edit').forEach(el=>el.addEventListener('change',reprevisualizar));
 }
 
 function filtrarTexto() {
@@ -257,19 +278,19 @@ function actualizarBarra() {
     barra.classList.toggle('visible', asignadas > 0);
     $('#accionbar-texto').innerHTML = `<b>${asignadas}</b> foto${asignadas === 1 ? '' : 's'} lista${asignadas === 1 ? '' : 's'} para subir · las que ya tengan imagen se pisan, y se puede revertir.`;
     $('#btn-aplicar').textContent = `Subir ${asignadas} imagen${asignadas === 1 ? '' : 'es'}`;
-    $('#btn-aplicar').disabled = asignadas === 0;
+    $('#btn-aplicar').disabled = asignadas === 0 || ESTADO.busy;
     return;
   }
-  const filas = ESTADO.filas[ESTADO.hoja] || [];
+  const filas = ['productos','proveedores','precios'].flatMap(h=>ESTADO.filas[h]||[]);
   if (!filas.length) { barra.classList.remove('visible'); return; }
   const c = contar(filas);
   const aEscribir = c.alta + c.modificacion;
   barra.classList.add('visible');
   $('#accionbar-texto').innerHTML = c.error
     ? `<span style="color:var(--red)">Hay ${c.error} fila${c.error === 1 ? '' : 's'} con error.</span> Corregilas en la tabla: no se escribe nada hasta que no quede ninguna.`
-    : `Se van a crear <b>${c.alta}</b> y modificar <b>${c.modificacion}</b>. Las ${c.igual} sin cambios no se tocan.`;
+    : ['productos','proveedores','precios'].map(h=>{const n=contar(ESTADO.filas[h]||[]);return `<b>${n.alta+n.modificacion}</b> cambios en ${h}`;}).join(' · ') + '. Los campos vacíos opcionales se conservan.';
   $('#btn-aplicar').textContent = `Crear ${c.alta} · Modificar ${c.modificacion}`;
-  $('#btn-aplicar').disabled = c.error > 0 || aEscribir === 0;
+  $('#btn-aplicar').disabled = c.error > 0 || aEscribir === 0 || ESTADO.busy || !ESTADO.revision;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -306,7 +327,8 @@ function achicar(archivo) {
    los nombres de producto. Reemplaza al diccionario MAPEO escrito a mano. */
 function proponerSku(nombreArchivo, productos) {
   const base = nombreArchivo.replace(/\.[^.]+$/, '');
-  const exacto = productos.find(p => base.includes(p.sku));
+  const exactos=productos.filter(p=>normalizar(base).split(' ').includes(normalizar(p.sku)));
+  const exacto = exactos.length===1?exactos[0]:null;
   if (exacto) return { sku: exacto.sku, origen: 'sku' };
 
   const palabras = normalizar(base).split(' ').filter(w => w.length > 2);
@@ -340,9 +362,10 @@ function proponerSku(nombreArchivo, productos) {
 }
 
 async function cargarFotos(archivos) {
+  ESTADO.requestId=null;
   const imagenes = [...archivos].filter(a => /^image\//.test(a.type));
   if (!imagenes.length) return;
-  try { ESTADO.sinFoto = await pedir('/api/productos/sin-imagen'); } catch (e) { ESTADO.sinFoto = []; }
+  try { ESTADO.sinFoto = await pedir('/api/productos/sin-imagen?todos=true'); } catch (e) {aviso(e.message);return;}
 
   $('#nombre-imagenes').textContent = `Procesando ${imagenes.length} fotos…`;
   ESTADO.fotos = [];
@@ -352,8 +375,8 @@ async function cargarFotos(archivos) {
       const p = proponerSku(archivo.name, ESTADO.sinFoto);
       ESTADO.fotos.push({ archivo: archivo.name, dataUrl: r.dataUrl,
         pesoOriginal: archivo.size, pesoFinal: r.pesoFinal,
-        medidas: `${r.ancho}×${r.alto}`, sku: p.sku, origen: p.origen });
-    } catch (e) { /* un archivo ilegible no frena a los demas */ }
+        medidas: `${r.ancho}×${r.alto}`, sku: p.origen==='sku'?p.sku:null, sugerencia:p.sku, origen: p.origen });
+    } catch (e) { aviso('Archivo rechazado: '+archivo.name); }
   }
   $('#imagenes-entrada').hidden = true;
   $('#imagenes-board').hidden = false;
@@ -376,12 +399,13 @@ function pintarFotos() {
   const opciones = ESTADO.sinFoto;
   $('#grid-imagenes').innerHTML = fotos.map((f, i) => {
     const clase = !f.sku ? 'huerfana' : f.origen === 'sku' ? 'asignada' : 'sugerida';
-    const prod = opciones.find(p => p.sku === f.sku);
+    const prod = opciones.find(p => p.sku === (f.sku||f.sugerencia));
     return `<div class="foto ${clase} ${ESTADO.fotoSel === i ? 'sel' : ''}" data-i="${i}">
       <img class="miniatura" src="${f.dataUrl}" alt="${esc(f.archivo)}" loading="lazy">
+      ${prod?.tiene_imagen&&f.sku?`<details class="foto-info"><summary>Comparar con foto actual</summary><img src="/api/productos/foto?sku=${encodeURIComponent(f.sku)}" alt="Foto actual en Odoo" loading="lazy" width="128" height="128"></details>`:''}
       <div class="foto-info">
         <div class="foto-archivo" title="${esc(f.archivo)}">${esc(f.archivo)}</div>
-        <div class="foto-sku ${f.sku ? '' : 'sin'}">${f.sku ? esc(f.sku) + (prod ? ' · ' + esc(prod.nombre) : '') : 'Sin asignar'}</div>
+        <div class="foto-sku ${f.sku ? '' : 'sin'}">${f.sku ? esc(f.sku) + (prod ? ' · ' + esc(prod.nombre) : '') : f.sugerencia?'Propuesta: '+esc(f.sugerencia)+' · '+esc(prod?.nombre||'')+' · Seleccionala para confirmar':'Sin asignar'}</div>
         <div class="foto-peso">${fmtMB(f.pesoOriginal)} → <b>${fmtMB(f.pesoFinal)}</b> · ${f.medidas}</div>
         <select data-i="${i}">
           <option value="">— sin asignar —</option>
@@ -391,10 +415,10 @@ function pintarFotos() {
   }).join('');
 
   const libres = opciones.filter(p => !fotos.some(f => f.sku === p.sku));
-  $('#sub-sin-foto').textContent = `${libres.length} de ${opciones.length} siguen sin imagen.`;
+  $('#sub-sin-foto').textContent = `${libres.length} productos disponibles para asignar. Se indica si ya tienen foto.`;
   $('#lista-sin-foto').innerHTML = libres.length
     ? libres.map(p => `<div class="sin-foto-item" data-sku="${esc(p.sku)}">
-        <div class="ph">▣</div><div><b>${esc(p.nombre)}</b><small>${esc(p.sku)}</small></div></div>`).join('')
+        <div class="ph">▣</div><div><b>${esc(p.nombre)}</b><small>${esc(p.sku)} · ${p.tiene_imagen?'Reemplazar foto':'Sin foto'}</small></div></div>`).join('')
     : '<p class="vacio">Todos los productos quedaron con foto.</p>';
 
   $$('#grid-imagenes .miniatura').forEach(el => el.addEventListener('click', () => {
@@ -429,10 +453,28 @@ function pintarPendientes() {
       <td>${esc(x.proveedor)}</td><td class="sku">${esc(x.codigo_proveedor)}</td>
       <td>${esc(x.descripcion)}</td><td class="num">$${esc(x.precio)}</td>
       <td class="sku">Factura ${esc(x.factura)}</td>
-      <td><button class="secundario chico">Dar de alta</button></td>
+      <td><button class="secundario chico" data-pendiente="${esc(x.id)}">Resolver producto</button></td>
     </tr>`).join('')}</tbody></table></div>
     <div class="aviso">Al crearlos, el agente administrativo puede retomar la factura donde la dejó.</div>`
     : '<p class="vacio">No hay productos pendientes. Cuando el agente administrativo encuentre un código que no existe, va a aparecer acá.</p>';
+  $$('[data-pendiente]').forEach(button=>button.onclick=()=>abrirPendiente(p.find(x=>x.id===button.dataset.pendiente)));
+}
+
+function abrirPendiente(item){
+ const dialog=document.createElement('dialog');dialog.className='card';
+ dialog.innerHTML=`<form><h2>Resolver producto de factura</h2><p>${esc(item.proveedor)} · ${esc(item.descripcion)}</p>
+ <label>SKU existente o nuevo<input name="sku" required></label>
+ <label>Nombre para un producto nuevo<input name="nombre" value="${esc(item.descripcion)}"></label>
+ <label>Unidades por caja si es nuevo<input name="unidades" type="number" min="1" step="1"></label>
+ <label>Precio de compra por unidad de Odoo<input name="precio" type="number" min="0" step="0.0001" required></label>
+ <p>El comprobante indica ${esc(item.precio)}. Verificá si corresponde a una unidad o una caja.</p>
+ <button>Preparar para revisión</button><button type="button" data-cerrar>Cancelar</button></form>`;
+ document.body.append(dialog);dialog.showModal();dialog.querySelector('[data-cerrar]').onclick=()=>dialog.remove();
+ dialog.querySelector('form').onsubmit=async e=>{e.preventDefault();const body=Object.fromEntries(new FormData(e.target));
+ try{const r=await pedir(`/api/productos/pendientes/${item.id}/preparar`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ ESTADO.crudas=r.filas;ESTADO.filas=r.plan;ESTADO.revision=r.plan._revision;ESTADO.requestId=null;
+ $('[data-tab="productos"]').click();pintarTodo();dialog.remove();
+ }catch(error){aviso(error.message);}};
 }
 
 // ══════════════════════════════════════════════════════════
@@ -442,6 +484,8 @@ function pintarPendientes() {
 // Qué operaciones tienen sentido según el tipo del campo: multiplicar un
 // nombre no significa nada.
 const OPERACIONES = {
+  aumentar_pct:{texto:'Aumentar un porcentaje',tipos:['numero']},
+  redondear:{texto:'Redondear a múltiplos de',tipos:['numero']},
   fijar:       { texto: 'Fijar en',        tipos: ['texto', 'numero', 'm2o', 'm2m', 'booleano'] },
   multiplicar: { texto: 'Multiplicar por', tipos: ['numero'] },
   sumar:       { texto: 'Sumar',           tipos: ['numero'] },
@@ -481,7 +525,7 @@ function pintarValor() {
   $('#m-valor-caja').innerHTML = op === 'reemplazar'
     ? 'Buscar / reemplazar por<div style="display:flex;gap:8px">'
       + '<input id="m-valor" placeholder="texto viejo"><input id="m-valor2" placeholder="texto nuevo"></div>'
-    : 'Valor<input id="m-valor" placeholder="' + (op === 'multiplicar' ? '1.15 para un 15%' : '') + '">';
+    : 'Valor<input id="m-valor" placeholder="' + (op === 'aumentar_pct' ? '15 para aumentar 15%' : op==='redondear'?'10 para múltiplos de $10':op === 'multiplicar' ? '1.15 para un 15%' : '') + '">';
 }
 
 $('#btn-masiva').addEventListener('click', async () => {
@@ -507,6 +551,7 @@ $('#btn-masiva').addEventListener('click', async () => {
     });
     ESTADO.crudas = { productos: r.filas, proveedores: [], precios: [] };
     ESTADO.filas = r.plan;
+    ESTADO.revision=r.plan._revision;ESTADO.requestId=null;
     $('#m-info').textContent = '';
     pintarTodo();
   } catch (e) {
@@ -530,18 +575,19 @@ function conectarDrop(zona, input, alSoltar) {
 
 conectarDrop($('#drop-imagenes'), $('#file-imagenes'), cargarFotos);
 conectarDrop($('#drop-productos'), $('#file-productos'), files => {
+  ESTADO.archivo=files[0]||null;
   if (files[0]) $('#nombre-productos').textContent = files[0].name;
 });
 
 $('#btn-leer-productos').addEventListener('click', async () => {
   const texto = $('#pegar-productos').value.trim();
   if (texto) return previsualizar({ productos: leerTSV(texto), proveedores: [], precios: [] });
-  const archivo = $('#file-productos').files[0];
+  const archivo = ESTADO.archivo;
   if (!archivo) return alert('Subí un archivo o pegá las celdas desde Excel.');
   try {
     // El .xlsx lo lee el servidor: trae las tres hojas de una. Va como cuerpo
     // crudo, igual que los PDF del agente administrativo.
-    previsualizar(await pedir(`/api/productos/leer?nombre=${encodeURIComponent(archivo.name)}`,
+    await previsualizar(await pedir(`/api/productos/leer?nombre=${encodeURIComponent(archivo.name)}`,
                               { method: 'POST', body: archivo }));
   } catch (e) {
     alert('No se pudo leer el archivo: ' + e.message);
@@ -566,6 +612,9 @@ $('#btn-plantilla').addEventListener('click', () => {
 });
 $('#buscar-productos').addEventListener('input', filtrarTexto);
 $('#btn-aplicar').addEventListener('click', async () => {
+  if(ESTADO.busy)return;
+  if(!confirm($('#accionbar-texto').textContent+'\nSe aplicará en Odoo producción. ¿Continuar?'))return;
+  ESTADO.busy=true; ESTADO.requestId ||= crypto.randomUUID();
   const boton = $('#btn-aplicar');
   const textoOriginal = boton.textContent;
   boton.disabled = true; boton.textContent = 'Aplicando…';
@@ -573,16 +622,18 @@ $('#btn-aplicar').addEventListener('click', async () => {
     const r = ESTADO.hoja === 'imagenes'
       ? await pedir('/api/productos/imagenes', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ asignaciones: ESTADO.fotos.filter(f => f.sku)
+          body: JSON.stringify({ request_id:ESTADO.requestId, asignaciones: ESTADO.fotos.filter(f => f.sku)
             .map(f => ({ sku: f.sku, imagen: f.dataUrl })) }) })
       : await pedir('/api/productos/aplicar', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(ESTADO.crudas) });
-    mostrarResultado(r);
+          body: JSON.stringify({...ESTADO.crudas,revision:ESTADO.revision,request_id:ESTADO.requestId}) });
+    aviso('Carga #'+r.id+' recibida. Seguí su avance en el historial.');
+    ESTADO.revision=null;
+    await cargarHistorial();
   } catch (e) {
     boton.disabled = false; boton.textContent = textoOriginal;
-    alert('No se pudo aplicar: ' + e.message);
-  }
+    aviso('No se pudo confirmar el resultado: ' + e.message);
+  } finally {ESTADO.busy=false;boton.textContent=textoOriginal;actualizarBarra();}
 });
 
 function mostrarResultado(r) {
@@ -611,4 +662,54 @@ $('#btn-cancelar').addEventListener('click', () => {
   (ESTADO.hoja === 'imagenes' ? $('#btn-otras-fotos') : $('#btn-otro-archivo')).click();
 });
 
-iniciar();
+function aviso(texto){$('#mensaje-productos').textContent=texto;}
+async function cargarHistorial(){
+ try {
+  const rows=await pedir('/api/productos/corridas');
+  const box=$('#historial-cuerpo');box.replaceChildren();
+  if(!rows.length){box.textContent='Todavía no hay cargas registradas.';return;}
+  for(const r of rows){
+   const card=document.createElement('article');card.className='card corrida';
+   const title=document.createElement('h3');title.textContent=`Carga #${r.id} · ${r.tipo} · ${r.estado||'Anterior'}`;
+   const info=document.createElement('p');info.textContent=`${new Date(r.cuando).toLocaleString('es-AR')} · ${r.avance||0} escrituras confirmadas. ${r.mensaje||''}`;
+   card.append(title,info);
+   for(const reg of r.registros||[]){
+    try{const url=new URL(r.odoo_url);if(url.protocol!=='https:')continue;
+     url.pathname='/web';url.hash=`id=${reg.id}&model=${reg.modelo}&view_type=form`;
+     const link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener';link.textContent=`Ver registro ${reg.id} ↗ `;card.append(link);
+    }catch{}
+   }
+   if(['completada','parcial'].includes(r.estado)){
+    const button=document.createElement('button');button.className='fantasma';button.textContent='Revisar reversión';
+    button.onclick=async()=>{button.disabled=true;try{
+     const plan=await pedir(`/api/productos/corridas/${r.id}/revertir?revisar=true`,{method:'POST'});
+     if(confirm(plan.acciones.map(a=>`${a.accion} · registro ${a.id}`).join('\n')+'\n¿Confirmar reversión?')){
+      await pedir(`/api/productos/corridas/${r.id}/revertir`,{method:'POST'});await cargarHistorial();
+     }
+    }catch(e){aviso(e.message);}finally{button.disabled=false;}};card.append(button);
+   }
+   box.append(card);
+  }
+ }catch(e){aviso(e.message);}
+}
+$('#btn-exportar').onclick=()=>{
+ const lines=[['Hoja','SKU','Estado','Campo','Anterior','Nuevo','Errores']];
+ for(const hoja of ['productos','proveedores','precios'])for(const r of ESTADO.filas[hoja]||[])
+ for(const [col,value] of Object.entries(r.campos||{}))lines.push([hoja,r.sku,r.estado,col,value.viejo??'',value.nuevo??'',(r.errores||[]).join(' · ')]);
+ const csv='\ufeff'+lines.map(row=>row.map(v=>'"'+String(v).replaceAll('"','""')+'"').join(';')).join('\r\n');
+ const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='revision-productos.csv';a.click();URL.revokeObjectURL(url);
+};
+$('#btn-historial').onclick=cargarHistorial;
+$('#solo-cambios').onchange=()=>pintarPreview('productos');
+$$('[data-tarea]').forEach(button=>button.onclick=()=>{
+ const task=button.dataset.tarea;
+ if(['crear','modificar'].includes(task)){
+  $('[data-tab="productos"]').click();$('#btn-otro-archivo').click();
+  $(task==='crear'?'#productos-entrada':'#masiva').scrollIntoView({behavior:'smooth',block:'start'});
+ }else{ $(`[data-tab="${task}"]`).click(); }
+});
+$('#btn-recuperar').onclick=()=>{try{const saved=JSON.parse(localStorage.getItem('kairon-productos-borrador')||'null');if(saved)previsualizar(saved);else aviso('No hay un borrador guardado.');}catch{aviso('No se pudo recuperar el borrador.');}};
+async function refrescarPendientes(){try{ESTADO.pendientes=await pedir('/api/productos/pendientes');pintarPendientes();}catch(e){aviso(e.message);}}
+$('#btn-revisar-pendientes').onclick=async()=>{try{await pedir('/api/productos/pendientes/revisar',{method:'POST'});await refrescarPendientes();aviso('Equivalencias comprobadas. Los comprobantes completos se revalidarán en Administración.');}catch(e){aviso(e.message);}};
+setInterval(()=>{if(!document.hidden){cargarHistorial();if(ESTADO.hoja==='pendientes')refrescarPendientes();}},7000);
+iniciar();cargarHistorial();

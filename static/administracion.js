@@ -61,6 +61,7 @@ $('upload').addEventListener('submit', async event => {
 });
 const labels = {recibido:'Recibida', leyendo:'Leyendo PDF', validando:'Controlando', creando_orden:'Creando orden', creando_factura:'Cargando', verificando:'Verificando', contabilizando:'Contabilizando', completado:'Contabilizada', borrador:'En borrador', existente:'Ya existe en Odoo', revision:'Requiere revisión', resultado_incierto:'Revisar en Odoo'};
 labels.creando_proveedor = 'Creando proveedor'; labels.confirmando_orden = 'Confirmando compra';
+labels.esperando_productos='Esperando productos';
 async function history() {
   try {
     const rows = await api('facturas');
