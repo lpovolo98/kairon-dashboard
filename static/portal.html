@@ -95,13 +95,13 @@ main { flex: 1; padding: 48px 44px 60px; min-width: 0; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
-</head>
+<link rel="stylesheet" href="/static/kairon-theme.css?v=20260909-1"></head>
 <body>
 
 <aside>
   <div class="marca">
     <img src="/static/kairon_logo.png" alt="Kairon">
-    <span>Kairon</span>
+    <span><em>Distribuciones</em>Kairon</span>
   </div>
 
   <div class="buscador">
@@ -125,6 +125,7 @@ main { flex: 1; padding: 48px 44px 60px; min-width: 0; }
     <p id="fecha"></p>
   </div>
   <div class="rejilla" id="rejilla"></div>
+<section class="card recent-activity"><div class="activity-head"><div><h2>Actividad reciente</h2><p>Resultados y controles de tus agentes.</p></div><button class="activity-btn" id="activity-refresh">Actualizar</button></div><p id="activity-notice" class="activity-notice" role="status"></p><div class="activity-table" id="activity-list"><p class="activity-empty">Consultando actividad…</p></div></section><dialog id="activity-log" class="activity-log" aria-label="Registro de la tarea"></dialog>
 </main>
 
 <script>
@@ -142,7 +143,7 @@ const CHEV = '<svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></sv
 
 const MENU = [
   { grupo: 'Aplicaciones', items: [
-    { nombre: 'Dashboard comercial', icono: 'panel', href: '/dashboard', activo: true, etiqueta: 'Ventas, stock y cobranzas',
+    { nombre: 'Dashboard comercial', icono: 'panel', href: '/dashboard', etiqueta: 'Ventas, stock y cobranzas',
       sub: ['Ventas', 'Stock', 'Clientes', 'Cobranzas', 'Objetivos', 'Mapas'] },
     { nombre: 'Agente de ventas', icono: 'chat', href: '/agente', etiqueta: 'WhatsApp por día de visita',
       sub: ['Clientes', 'Mapa', 'Selección', 'Exportar'] },
@@ -247,5 +248,5 @@ fetch('/api/me')
   .catch(() => {});
 </script>
 
-</body>
+<script src="/static/portal-activity.js?v=20260909-1"></script></body>
 </html>

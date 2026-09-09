@@ -525,8 +525,8 @@ canvas { max-height: 200px; }
 .zona-lbl { background: none; border: 0; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 4px #000; white-space: nowrap; }
 @media (max-width: 1100px) { .mapa-wrap { grid-template-columns: 1fr; } .mapa-side { height: 420px; } #mapa { height: 460px; } }
 </style>
-</head>
-<body>
+<link rel="stylesheet" href="/static/kairon-theme.css?v=20260909-1"></head>
+<body class="dashboard-page">
 
 <!-- ── Modal Generar Pedido ── -->
 <div class="modal-overlay" id="modal-pedido">
@@ -1550,12 +1550,12 @@ function renderVentasCharts() {
       responsive:true, maintainAspectRatio:true,
       layout:{ padding:{ top:14 } },
       plugins:{
-        legend:{display:true, labels:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        legend:{display:true, labels:{color:'#5c6278',font:{family:'Inter',size:10}}},
         tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${Number(ctx.raw).toLocaleString('es-AR',{maximumFractionDigits:1})}`}}
       },
       scales:{
-        x:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
-        y:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}}
+        x:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Inter',size:10}}},
+        y:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Inter',size:10}}}
       }
     },
     plugins: [labelPlugin]
@@ -1575,8 +1575,8 @@ function renderVentasCharts() {
       layout:{ padding:{ top:14 } },
       plugins:{legend:{display:false}, tooltip:{callbacks:{label:ctx=>`Clientes: ${ctx.raw}`}}},
       scales:{
-        x:{grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
-        y:{grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}}
+        x:{grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Inter',size:10}}},
+        y:{grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Inter',size:10}}}
       }
     },
     plugins:[labelPlugin]
@@ -1602,12 +1602,12 @@ function renderVentasCharts() {
       responsive:true, maintainAspectRatio:true,
       layout:{ padding:{ top:14 } },
       plugins:{
-        legend:{display:true, labels:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        legend:{display:true, labels:{color:'#5c6278',font:{family:'Inter',size:10}}},
         tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: $${fmtMoney(ctx.raw)}`}}
       },
       scales:{
-        x:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
-        y:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Poppins',size:9}, callback:v=>'$'+fmtM(v)}}
+        x:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Inter',size:10}}},
+        y:{stacked:true, grid:{color:'#1a1e28'}, ticks:{color:'#5c6278',font:{family:'Inter',size:9}, callback:v=>'$'+fmtM(v)}}
       }
     },
     plugins:[labelPlugin]
@@ -2276,13 +2276,13 @@ function renderClienteDetalleModal(cliente, detalle, mesFiltro) {
     options: {
       responsive:true, maintainAspectRatio:true,
       plugins:{
-        legend:{display:true, labels:{color:'#5c6278',font:{family:'Poppins',size:10}}},
+        legend:{display:true, labels:{color:'#5c6278',font:{family:'Inter',size:10}}},
         tooltip:{callbacks:{label:ctx => ctx.dataset.label==='Cajas' ? `Cajas: ${ctx.raw}` : `Facturación: $${fmtMoney(ctx.raw)}`}}
       },
       scales:{
-        x:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
-        y:{position:'left', grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:10}}},
-        y1:{position:'right', grid:{display:false},ticks:{color:'#5c6278',font:{family:'Poppins',size:9},callback:v=>'$'+fmtMoney(v)}}
+        x:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Inter',size:10}}},
+        y:{position:'left', grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Inter',size:10}}},
+        y1:{position:'right', grid:{display:false},ticks:{color:'#5c6278',font:{family:'Inter',size:9},callback:v=>'$'+fmtMoney(v)}}
       }
     }
   });
@@ -2412,8 +2412,8 @@ function renderCobrPareto() {
       responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:false}, tooltip:{callbacks:{label:ctx=>ctx.datasetIndex===0?'$'+fmtMoney(ctx.raw):ctx.raw+'%'}} },
       scales:{
-        x:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:9},maxRotation:35}},
-        y:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Poppins',size:9},callback:v=>'$'+fmtMoney(v)}},
+        x:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Inter',size:9},maxRotation:35}},
+        y:{grid:{color:'#1a1e28'},ticks:{color:'#5c6278',font:{family:'Inter',size:9},callback:v=>'$'+fmtMoney(v)}},
         y2:{position:'right',min:0,max:100,grid:{display:false},ticks:{color:'#f5c842',font:{size:9},callback:v=>v+'%'}}
       }
     }
@@ -2869,8 +2869,8 @@ function renderPedidosCharts() {
     layout: { padding: { top: 14 } },
     plugins: { legend: { display: false } },
     scales: {
-      x: { grid: { color: '#1a1e28' }, ticks: { color: '#5c6278', font: { family: 'Poppins', size: 10 } } },
-      y: { grid: { color: '#1a1e28' }, ticks: { color: '#5c6278', font: { family: 'Poppins', size: 10 } } }
+      x: { grid: { color: '#1a1e28' }, ticks: { color: '#5c6278', font: { family: 'Inter', size: 10 } } },
+      y: { grid: { color: '#1a1e28' }, ticks: { color: '#5c6278', font: { family: 'Inter', size: 10 } } }
     }
   };
 
