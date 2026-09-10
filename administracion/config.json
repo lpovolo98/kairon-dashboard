@@ -64,6 +64,7 @@
     "piso_absoluto": 0.05,
     "_piso_por_que": "La tolerancia sigue siendo 0%. El piso solo evita que una diferencia de redondeo de centavos se reporte como cambio de precio."
   },
+  "unidades_compra_por_proveedor": {"30718495896": {"16": 30}},
   "unidad_de_carga": "bulto",
-  "_unidad_de_carga_por_que": "Decidido el 27/08/2026. Las 72 facturas de Nutregal ya cargadas a mano usan cajas (12 lineas a $ 26.360, no 192 a $ 1.647,50), asi que el agente hace lo mismo para no romper la continuidad del historial de precios de compra. OJO: la UdM de los productos Murken en Odoo es 'Units' factor 1, asi que la cantidad queda expresada en Units pero significa cajas. Es la convencion existente, no un error nuevo. El otro valor posible es 'udm_producto', que respeta la UdM y cargaria 192 unidades."
+  "_unidad_de_carga_por_que": "Las cantidades por bulto requieren una UdM de compra real. Nutregal: Caja de 16 (id 30), validada contra la unidad de stock. No confundir cantidad de cajas con Units."
 }

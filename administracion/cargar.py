@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -274,6 +275,24 @@ def verificar_duplicado(o: Odoo, partner_id: int, doc: dict, inf: Informe,
 
 # ------------------------------------------------------- productos y unidades
 
+def unidad_compra_confirmada(o, doc, cfg, divisor, uom_id, factor):
+    """Use explicitly confirmed supplier packaging, validating the live conversion."""
+    vat = re.sub(r'\D', '', doc.get('proveedor', {}).get('cuit', ''))
+    mapping = cfg.get('unidades_compra_por_proveedor', {}).get(vat)
+    if mapping is None:
+        return None
+    target = mapping.get(str(int(divisor))) if divisor == int(divisor) else None
+    if not target:
+        raise Frenar('Falta confirmar la unidad de compra para este tamaño de caja')
+    unit = o.uno('uom.uom', [['id', '=', target]], ['name','factor','relative_uom_id'])
+    if not unit or abs(unit['factor'] - divisor) > .001:
+        raise Frenar('La unidad de caja configurada no coincide con el contenido de la factura')
+    reference = unit.get('relative_uom_id')
+    if uom_id != target and (factor != 1 or not reference or reference[0] != uom_id):
+        raise Frenar('La caja configurada no convierte a la unidad de stock del producto')
+    return target, unit['name'], unit['factor']
+
+
 def resolver_lineas(o: Odoo, doc: dict, proveedor: dict, cfg: dict, inf: Informe) -> list[dict]:
     """Mapea cada línea de la factura a un producto de Odoo y su UdM.
 
@@ -407,6 +426,10 @@ def resolver_lineas(o: Odoo, doc: dict, proveedor: dict, cfg: dict, inf: Informe
                 f"Todos los cálculos en cajas de este producto van a salir mal."
             )
 
+        if modo_carga == 'bulto' and l.get('cantidad_unidades'):
+            confirmed = unidad_compra_confirmada(o, doc, cfg, divisor, uom_id, factor)
+            if confirmed:
+                uom_id, uom_nombre, factor = confirmed
         resueltas.append({
             "indice": i,
             "factura": l,

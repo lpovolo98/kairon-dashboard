@@ -1,10 +1,23 @@
 import unittest
+from unittest.mock import Mock
 from pathlib import Path
 from administracion.nutregal_pdf import parse
 from administracion.service import Document, loader
 
 
 class Nutregal(unittest.TestCase):
+    def test_confirmed_box_has_real_stock_conversion(self):
+        o = Mock()
+        o.uno.return_value = {'name':'Caja','factor':16,'relative_uom_id':[1,'Units']}
+        cfg = {'unidades_compra_por_proveedor':{'30718495896':{'16':30}}}
+        doc = {'proveedor':{'cuit':'30-71849589-6'}}
+        self.assertEqual(loader.unidad_compra_confirmada(o,doc,cfg,16,1,1),(30,'Caja',16))
+        o.uno.return_value['factor'] = 12
+        with self.assertRaises(loader.Frenar):
+            loader.unidad_compra_confirmada(o,doc,cfg,16,1,1)
+        with self.assertRaises(loader.Frenar):
+            loader.unidad_compra_confirmada(o,doc,cfg,24,1,1)
+
     def setUp(self):
         self.text = (Path(__file__).parent/'fixtures/nutregal.txt').read_text('utf-8')
 
