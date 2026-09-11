@@ -1176,7 +1176,7 @@ def status():
             "commit": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:7],
         },
         "productos": {"version": "2026-09-08.1", "trabajos_persistentes": True},
-        "comercial": {"version": "2026-09-11.1", "imagenes_ia_configuradas": bool(os.getenv('OPENAI_API_KEY') and os.getenv('COMERCIAL_IMAGE_MODEL'))},
+        "comercial": {"version": "2026-09-11.2", "flyers_completos": True, "imagenes_ia_configuradas": bool(os.getenv('OPENAI_API_KEY') and os.getenv('COMERCIAL_IMAGE_MODEL'))},
         "administracion": {
             "version": "2026-09-08.2",
             "modo": "compra-confirmada-factura-borrador",

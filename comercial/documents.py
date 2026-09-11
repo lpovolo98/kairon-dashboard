@@ -63,7 +63,7 @@ def catalog(path,campaign,products,draft=True,images=None):
     def page(c,d):header(c,*A4,'Lista de precios',campaign['name'],draft)
     doc.build(story,onFirstPage=page,onLaterPages=page)
 
-def action_pages(path,campaign,products,images,draft=True,backgrounds=None):
+def action_pages(path,campaign,products,images,draft=True,backgrounds=None,full_flyers=False):
     backgrounds=backgrounds or {}
     byid={p['id']:p for p in products};w,h=A4;c=canvas.Canvas(str(path),pagesize=A4)
     header(c,w,h,'Carpeta de acciones comerciales',campaign['name'],draft)
@@ -79,6 +79,14 @@ def action_pages(path,campaign,products,images,draft=True,backgrounds=None):
     c.showPage()
     for action_index,a in enumerate(campaign['actions']):
         ps=[byid[i] for i in a['products']]
+        if full_flyers and action_index in backgrounds:
+            # Preserve the approved portrait composition without stretching or template overlays.
+            c.drawImage(str(backgrounds[action_index]),0,0,w,h,preserveAspectRatio=True,anchor='c')
+            if draft:
+                c.setFillColor(HexColor(INK));c.rect(0,0,w,22,fill=1,stroke=0)
+                c.setFillColor(white);c.setFont('Helvetica-Bold',8)
+                c.drawCentredString(w/2,8,'BORRADOR - REVISAR PRECIOS, ESCALAS Y ENVASES ANTES DE APROBAR')
+            c.showPage();continue
         # Four packshots per page; every selected SKU gets its own exact price.
         for offset in range(0,len(ps),4):
             subset=ps[offset:offset+4]
@@ -147,10 +155,10 @@ def action_pages(path,campaign,products,images,draft=True,backgrounds=None):
     c.save()
     return first_piece_page
 
-def generate(folder,campaign,snapshot,images,draft=True,backgrounds=None):
+def generate(folder,campaign,snapshot,images,draft=True,backgrounds=None,full_flyers=False):
     folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
     catalog(folder/'catalogo.pdf',campaign,snapshot['products'],draft,images)
-    first_piece_page=action_pages(folder/'acciones.pdf',campaign,snapshot['products'],images,draft,backgrounds)
+    first_piece_page=action_pages(folder/'acciones.pdf',campaign,snapshot['products'],images,draft,backgrounds,full_flyers)
     from pypdf import PdfReader,PdfWriter
     writer=PdfWriter()
     for name in ('acciones.pdf','catalogo.pdf'):writer.append(PdfReader(folder/name))

@@ -154,9 +154,10 @@ def work(id):
             for i,action in enumerate(row['campaign']['actions']):
                 event(row,f'Generando diseño promocional {i+1} con OpenAI.');save(row)
                 path=folder/f'art-{i}.png'
-                metadata=creative.generate_background(action,[p for p in row['snapshot']['products'] if p['id'] in action['products']],path)
+                metadata=creative.generate_flyer(action,[p for p in row['snapshot']['products'] if p['id'] in action['products']],path,images,row['campaign'])
                 (folder/f'art-{i}.json').write_text(json.dumps(metadata),encoding='utf-8');backgrounds[i]=path
-        row['files']=generate(folder/'draft',row['campaign'],row['snapshot'],images,True,backgrounds)
+        row['render_mode']='full_flyer_v1'
+        row['files']=generate(folder/'draft',row['campaign'],row['snapshot'],images,True,backgrounds,full_flyers=True)
         row['state']='review';event(row,'PDF de catálogo, carpeta y piezas generados. Pendiente de revisión y aprobación.');save(row)
     except Exception as e:
         row['state']='error';event(row,'No se pudo generar: '+str(e));save(row)
@@ -179,7 +180,7 @@ def publish(id):
         from .documents import generate
         images={int(p.stem):p for p in folder.glob('*.png') if p.stem.isdigit()}
         backgrounds={int(p.stem.split('-')[1]):p for p in folder.glob('art-*.png')}
-        row['files']=generate(folder/'approved',row['campaign'],row['snapshot'],images,False,backgrounds)
+        row['files']=generate(folder/'approved',row['campaign'],row['snapshot'],images,False,backgrounds,full_flyers=row.get('render_mode')=='full_flyer_v1')
         row['state']='approved';row['approved_at']=datetime.now(timezone.utc).isoformat();event(row,'Edición aprobada y disponible en la biblioteca del portal.');save(row)
     except Exception as e:row['state']='review';event(row,'No se pudo publicar: '+str(e));save(row)
 @router.get('/api/comercial/ediciones/{id}/archivo/{name}')
