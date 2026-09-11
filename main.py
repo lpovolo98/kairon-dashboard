@@ -23,6 +23,9 @@ from administracion.api import router as administracion_router
 app.include_router(administracion_router)
 from productos.api import router as productos_router
 app.include_router(productos_router)
+from comercial.api import router as comercial_router, recover as recover_comercial
+app.include_router(comercial_router)
+app.add_event_handler("startup", recover_comercial)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ─── Odoo config ────────────────────────────────────────────
@@ -1173,6 +1176,7 @@ def status():
             "commit": os.getenv("RAILWAY_GIT_COMMIT_SHA", "")[:7],
         },
         "productos": {"version": "2026-09-08.1", "trabajos_persistentes": True},
+        "comercial": {"version": "2026-09-11.1", "imagenes_ia_configuradas": bool(os.getenv('OPENAI_API_KEY') and os.getenv('COMERCIAL_IMAGE_MODEL'))},
         "administracion": {
             "version": "2026-09-08.2",
             "modo": "compra-confirmada-factura-borrador",
